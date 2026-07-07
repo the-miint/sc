@@ -1,0 +1,84 @@
+{
+  "classes": [
+    "a",
+    "b",
+    "c"
+  ],
+  "expected": {
+    "accuracy": 0.625,
+    "accuracy_ratio": 1.25,
+    "baseline_accuracy": 0.5,
+    "confusion_matrix": [
+      [
+        2,
+        0,
+        2
+      ],
+      [
+        0,
+        3,
+        1
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ],
+    "confusion_matrix_normalized": [
+      [
+        0.5,
+        0.0,
+        0.5
+      ],
+      [
+        0.0,
+        0.75,
+        0.25
+      ],
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ],
+    "labels": [
+      0,
+      1,
+      2
+    ]
+  },
+  "generator": {
+    "numpy": "1.26.4",
+    "qiime2_amplicon": "2024.10",
+    "scipy": "1.13.0",
+    "seed": 20260707,
+    "sklearn": "1.4.2"
+  },
+  "id": "cls_zero_row_k3",
+  "kind": "classification",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09
+  },
+  "y_pred": [
+    0,
+    2,
+    1,
+    2,
+    0,
+    1,
+    2,
+    1
+  ],
+  "y_true": [
+    0,
+    0,
+    1,
+    1,
+    0,
+    1,
+    0,
+    1
+  ]
+}

@@ -15,10 +15,18 @@ rand = { version = "0.10", default-features = false }
 # wasm-safe as-is; the pinned 0.10 line freezes the value-stable ChaCha8 stream.
 rand_chacha = "0.10"
 rayon = { version = "1", optional = true }
+# default-features = false drops statrs's nalgebra-backed multivariate
+# distributions (which we never use), keeping the metrics module pure-Rust and
+# wasm-clean. We need only the univariate Student's t CDF for regression
+# p-values. See sc-design.html §11 and the M1 plan.
+statrs = { version = "0.18", default-features = false }
 
 [features]
 default = ["parallel"]
 parallel = ["dep:rayon"]
+
+[dev-dependencies]
+sc-oracle = { path = "../sc-oracle" }
 
 [lints]
 workspace = true

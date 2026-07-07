@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sc-core"]
+members = ["crates/sc-core", "crates/sc-oracle"]
 
 [workspace.package]
 version = "0.1.0"

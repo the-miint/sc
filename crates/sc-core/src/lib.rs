@@ -13,6 +13,7 @@
 
 mod error;
 mod exec;
+pub mod metrics;
 mod rng;
 
 pub use error::{Error, Result};
