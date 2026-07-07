@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/sc-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+authors = ["Daniel McDonald <d3mcdonald@health.ucsd.edu>"]
+
+[workspace.lints.clippy]
+all = "warn"

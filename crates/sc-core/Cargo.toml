@@ -1,0 +1,24 @@
+[package]
+name = "sc-core"
+description = "Core RandomForest engine for sc (pure Rust)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# default-features = false drops `os_rng`, which pulls `getrandom` — we never
+# seed from OS entropy (seeds are always explicit), and getrandom does not build
+# for wasm32 without a backend. See sc-design.html §11.
+rand = { version = "0.9", default-features = false }
+# rand_chacha's default features are just `std` (no getrandom), so it is
+# wasm-safe as-is; the pinned 0.9 line freezes the value-stable ChaCha8 stream.
+rand_chacha = "0.9"
+rayon = { version = "1", optional = true }
+
+[features]
+default = ["parallel"]
+parallel = ["dep:rayon"]
+
+[lints]
+workspace = true
