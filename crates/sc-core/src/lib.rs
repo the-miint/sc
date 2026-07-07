@@ -11,11 +11,15 @@
 //! RNG boundary with per-tree seed derivation, and a parallel/sequential
 //! execution shim whose output is invariant to thread count.
 
+pub mod data;
 mod error;
 mod exec;
 pub mod metrics;
+pub mod partition;
 mod rng;
 
+pub use data::{FeatureMatrix, Targets};
 pub use error::{Error, Result};
 pub use exec::indexed_map;
+pub use partition::{k_fold, stratified_k_fold, train_test_split, CvFolds, Split, TestSize};
 pub use rng::{tree_seed, DetRng};
