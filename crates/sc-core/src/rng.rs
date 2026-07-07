@@ -4,7 +4,7 @@
 //! (invariant across platforms and library versions) and thread-count
 //! invariance both depend on the primitives here. See `sc-design.html` §7.
 
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 /// Derive an independent, deterministic per-tree seed from a master seed and a
