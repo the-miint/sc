@@ -1,0 +1,117 @@
+{
+  "children_left": [
+    1,
+    -1,
+    -1
+  ],
+  "children_right": [
+    2,
+    -1,
+    -1
+  ],
+  "criterion": "gini",
+  "expected": {
+    "mdi": [
+      1.0
+    ],
+    "predict": [
+      0,
+      1,
+      0,
+      0
+    ],
+    "proba": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0
+      ]
+    ]
+  },
+  "feature": [
+    0,
+    -2,
+    -2
+  ],
+  "generator": {
+    "numpy": "1.26.4",
+    "qiime2_amplicon": "2024.10",
+    "scipy": "1.13.0",
+    "seed": 20260707,
+    "sklearn": "1.4.2"
+  },
+  "id": "tree_f32_boundary",
+  "impurity": [
+    0.5,
+    0.0,
+    0.0
+  ],
+  "kind": "tree_classifier",
+  "n_classes": 2,
+  "n_node_samples": [
+    4,
+    2,
+    2
+  ],
+  "test_coo": {
+    "cols": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "n_features": 1,
+    "n_samples": 4,
+    "rows": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "vals": [
+      0.2,
+      0.8,
+      0.5000000298023224,
+      0.5000000149011612
+    ]
+  },
+  "threshold": [
+    0.5,
+    -2.0,
+    -2.0
+  ],
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09
+  },
+  "value": [
+    [
+      0.5,
+      0.5
+    ],
+    [
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0
+    ]
+  ],
+  "weighted_n_node_samples": [
+    4.0,
+    2.0,
+    2.0
+  ]
+}

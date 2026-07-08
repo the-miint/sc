@@ -30,6 +30,7 @@ deny:
 # Deterministic: re-running produces byte-identical JSON.
 regen-fixtures:
 	$(ORACLE_PYTHON) oracle/generator/gen_metrics.py
+	$(ORACLE_PYTHON) oracle/generator/gen_tree.py
 
 clean:
 	$(CARGO) clean

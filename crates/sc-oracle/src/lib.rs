@@ -66,6 +66,8 @@ pub enum Payload {
     Classification(ClassificationCase),
     Regression(RegressionCase),
     RocCurve(RocCurveCase),
+    TreeClassifier(TreeClassifierCase),
+    TreeRegressor(TreeRegressorCase),
 }
 
 /// Accuracy / confusion / baseline, and — when `proba` is present — multiclass
@@ -134,6 +136,71 @@ pub struct RocCurveExpected {
     /// first threshold is `inf` in sklearn 1.4.2 and is stored as JSON `null`.
     pub thresholds: Vec<Option<f64>>,
     pub auc: f64,
+}
+
+/// A query table in COO form (implicit zeros omitted; explicit zeros allowed) —
+/// the input to a tree's `apply`/`predict_*`, fed to `FeatureMatrix::from_coo`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CooTable {
+    pub rows: Vec<i64>,
+    pub cols: Vec<i64>,
+    pub vals: Vec<f64>,
+    pub n_samples: usize,
+    pub n_features: usize,
+}
+
+/// A fitted `DecisionTreeClassifier`: its exported `tree_` arrays (per-node
+/// `value` is the class-proportion vector), a query table, and sklearn's
+/// `predict`/`predict_proba`/`feature_importances_` on that table. `criterion`
+/// is `"gini"` or `"entropy"` so the per-node impurity round-trip can pick the
+/// matching measure.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TreeClassifierCase {
+    pub children_left: Vec<i64>,
+    pub children_right: Vec<i64>,
+    pub feature: Vec<i64>,
+    pub threshold: Vec<f64>,
+    pub value: Vec<Vec<f64>>,
+    pub impurity: Vec<f64>,
+    pub n_node_samples: Vec<i64>,
+    pub weighted_n_node_samples: Vec<f64>,
+    pub n_classes: usize,
+    pub criterion: String,
+    pub test_coo: CooTable,
+    pub expected: TreeClassifierExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TreeClassifierExpected {
+    /// Predicted class index per query row (labels are `0..n_classes`).
+    pub predict: Vec<usize>,
+    /// `predict_proba` rows (each equals the reached leaf's `value`).
+    pub proba: Vec<Vec<f64>>,
+    /// `feature_importances_` (MDI), one per feature.
+    pub mdi: Vec<f64>,
+}
+
+/// A fitted `DecisionTreeRegressor`: like [`TreeClassifierCase`] but per-node
+/// `value` is a scalar (the node mean) and `expected.predict` is real-valued.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TreeRegressorCase {
+    pub children_left: Vec<i64>,
+    pub children_right: Vec<i64>,
+    pub feature: Vec<i64>,
+    pub threshold: Vec<f64>,
+    pub value: Vec<f64>,
+    pub impurity: Vec<f64>,
+    pub n_node_samples: Vec<i64>,
+    pub weighted_n_node_samples: Vec<f64>,
+    pub criterion: String,
+    pub test_coo: CooTable,
+    pub expected: TreeRegressorExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TreeRegressorExpected {
+    pub predict: Vec<f64>,
+    pub mdi: Vec<f64>,
 }
 
 /// Load every `*.json` fixture in `dir`, sorted by path for stable test order.

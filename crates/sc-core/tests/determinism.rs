@@ -4,7 +4,8 @@
 use std::collections::HashSet;
 
 use sc_core::{
-    indexed_map, k_fold, stratified_k_fold, train_test_split, tree_seed, DetRng, Error, TestSize,
+    grow, indexed_map, k_fold, stratified_k_fold, train_test_split, tree_seed, DetRng, Error,
+    FeatureMatrix, MaxFeatures, Targets, TestSize, TreeParams,
 };
 
 #[test]
@@ -105,4 +106,98 @@ fn error_is_display_and_std_error() {
     let e = Error::InvalidInput("boom".to_string());
     assert!(e.to_string().contains("boom"));
     let _dyn: &dyn std::error::Error = &e;
+}
+
+fn dense(rows: &[&[f64]]) -> FeatureMatrix {
+    let (n, m) = (rows.len(), rows[0].len());
+    let (mut r, mut c, mut v) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, row) in rows.iter().enumerate() {
+        for (j, &val) in row.iter().enumerate() {
+            if val != 0.0 {
+                r.push(i as i64);
+                c.push(j as i64);
+                v.push(val);
+            }
+        }
+    }
+    FeatureMatrix::from_coo(n, m, &r, &c, &v).unwrap()
+}
+
+/// Freezes the M3 grow builder end to end (per-node stats → stopping →
+/// per-node feature subsampling via `DetRng` → CSC split search → DFS node
+/// numbering). `max_features = 2 < 4` so the tree genuinely consumes the RNG.
+/// A diff here means the grow algorithm drifted and would silently change every
+/// tree (and, in M4, every forest) built from a given seed. Values are for the
+/// fixed 12-sample, 4-feature, 3-class input below.
+#[test]
+fn tree_grow_golden() {
+    let x = dense(&[
+        &[0.0, 1.0, 0.0, 2.0],
+        &[1.0, 0.0, 3.0, 0.0],
+        &[2.0, 2.0, 0.0, 1.0],
+        &[0.0, 3.0, 1.0, 0.0],
+        &[3.0, 0.0, 2.0, 2.0],
+        &[1.0, 1.0, 0.0, 3.0],
+        &[2.0, 0.0, 3.0, 0.0],
+        &[0.0, 2.0, 1.0, 1.0],
+        &[3.0, 3.0, 0.0, 0.0],
+        &[1.0, 0.0, 2.0, 2.0],
+        &[2.0, 1.0, 0.0, 3.0],
+        &[0.0, 0.0, 3.0, 1.0],
+    ]);
+    let y = Targets::categorical(&["a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c"])
+        .unwrap();
+    let mut p = TreeParams::classifier_defaults();
+    p.max_features = MaxFeatures::Count(2);
+    p.max_depth = Some(3);
+    let t = grow(&x, &y, &p, &mut DetRng::from_seed(20260707)).unwrap();
+
+    let n = t.n_nodes();
+    assert_eq!(n, 9);
+    let children_left: Vec<i32> = (0..n).map(|i| t.children_left(i)).collect();
+    let children_right: Vec<i32> = (0..n).map(|i| t.children_right(i)).collect();
+    let feature: Vec<i32> = (0..n).map(|i| t.feature(i)).collect();
+    let threshold: Vec<f64> = (0..n).map(|i| t.threshold(i)).collect();
+    let value: Vec<Vec<f64>> = (0..n).map(|i| t.value(i).to_vec()).collect();
+    let impurity: Vec<f64> = (0..n).map(|i| t.impurity(i)).collect();
+    let n_node_samples: Vec<u64> = (0..n).map(|i| t.n_node_samples(i)).collect();
+    let weighted: Vec<f64> = (0..n).map(|i| t.weighted_n_node_samples(i)).collect();
+
+    assert_eq!(children_left, [1, 2, 3, -1, -1, -1, 7, -1, -1]);
+    assert_eq!(children_right, [6, 5, 4, -1, -1, -1, 8, -1, -1]);
+    assert_eq!(feature, [0, 1, 3, -2, -2, -2, 2, -2, -2]);
+    assert_eq!(
+        threshold,
+        [2.5, 2.5, 0.5, -2.0, -2.0, -2.0, 1.0, -2.0, -2.0]
+    );
+    assert_eq!(
+        value,
+        vec![
+            vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+            vec![0.4, 0.3, 0.3],
+            vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+            vec![0.5, 0.5, 0.0],
+            vec![2.0 / 7.0, 2.0 / 7.0, 3.0 / 7.0],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 0.5, 0.5],
+            vec![0.0, 0.0, 1.0],
+            vec![0.0, 1.0, 0.0],
+        ]
+    );
+    assert_eq!(
+        impurity,
+        [
+            0.6666666666666667,
+            0.66,
+            0.6666666666666667,
+            0.5,
+            0.653061224489796,
+            0.0,
+            0.5,
+            0.0,
+            0.0
+        ]
+    );
+    assert_eq!(n_node_samples, [12, 10, 9, 2, 7, 1, 2, 1, 1]);
+    assert_eq!(weighted, [12.0, 10.0, 9.0, 2.0, 7.0, 1.0, 2.0, 1.0, 1.0]);
 }
