@@ -14,6 +14,7 @@
 pub mod data;
 mod error;
 mod exec;
+pub mod forest;
 pub mod metrics;
 pub mod partition;
 mod rng;
@@ -22,6 +23,7 @@ pub mod tree;
 pub use data::{FeatureMatrix, Targets};
 pub use error::{Error, Result};
 pub use exec::indexed_map;
+pub use forest::{MaxSamples, RandomForest, RandomForestParams};
 pub use partition::{k_fold, stratified_k_fold, train_test_split, CvFolds, Split, TestSize};
 pub use rng::{tree_seed, DetRng};
 pub use tree::criterion::{entropy, gini, variance};

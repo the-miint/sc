@@ -5,8 +5,11 @@ use std::collections::HashSet;
 
 use sc_core::{
     grow, indexed_map, k_fold, stratified_k_fold, train_test_split, tree_seed, DetRng, Error,
-    FeatureMatrix, MaxFeatures, Targets, TestSize, TreeParams,
+    FeatureMatrix, MaxFeatures, RandomForest, RandomForestParams, Targets, TestSize, TreeParams,
 };
+// Only the `parallel`-gated invariance test names `Tree` (via `sequential_forest`).
+#[cfg(feature = "parallel")]
+use sc_core::Tree;
 
 #[test]
 fn tree_seed_is_deterministic() {
@@ -200,4 +203,135 @@ fn tree_grow_golden() {
     );
     assert_eq!(n_node_samples, [12, 10, 9, 2, 7, 1, 2, 1, 1]);
     assert_eq!(weighted, [12.0, 10.0, 9.0, 2.0, 7.0, 1.0, 2.0, 1.0, 1.0]);
+}
+
+/// The fixed 12-sample, 4-feature, 3-class problem the forest golden/invariance
+/// tests share.
+fn forest_golden_data() -> (FeatureMatrix, Targets) {
+    let x = dense(&[
+        &[0.0, 1.0, 0.0, 2.0],
+        &[1.0, 0.0, 3.0, 0.0],
+        &[2.0, 2.0, 0.0, 1.0],
+        &[0.0, 3.0, 1.0, 0.0],
+        &[3.0, 0.0, 2.0, 2.0],
+        &[1.0, 1.0, 0.0, 3.0],
+        &[2.0, 0.0, 3.0, 0.0],
+        &[0.0, 2.0, 1.0, 1.0],
+        &[3.0, 3.0, 0.0, 0.0],
+        &[1.0, 0.0, 2.0, 2.0],
+        &[2.0, 1.0, 0.0, 3.0],
+        &[0.0, 0.0, 3.0, 1.0],
+    ]);
+    let y = Targets::categorical(&["a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c"])
+        .unwrap();
+    (x, y)
+}
+
+/// A random forest built by an independent, plainly-sequential per-tree loop
+/// (no `indexed_map`, no rayon) — the reference the parallel `fit` must match
+/// byte-for-byte. Uses only public API: the same per-tree seed derivation,
+/// bootstrap draw, and `grow` that `fit` uses internally. Only the
+/// `parallel`-gated invariance test uses it, so it is gated to match (else it is
+/// dead code under `--no-default-features`).
+#[cfg(feature = "parallel")]
+fn sequential_forest(
+    x: &FeatureMatrix,
+    y: &Targets,
+    p: &RandomForestParams,
+    master_seed: u64,
+) -> RandomForest {
+    let n = x.n_samples();
+    let n_boot = p.resolve_n_bootstrap(n).unwrap();
+    let trees: Vec<Tree> = (0..p.n_estimators)
+        .map(|i| {
+            let mut rng = DetRng::for_tree(master_seed, i as u64);
+            let sample: Vec<usize> = if p.bootstrap {
+                (0..n_boot)
+                    .map(|_| rng.uniform_u64(n as u64) as usize)
+                    .collect()
+            } else {
+                (0..n).collect()
+            };
+            let xb = x.select_rows(&sample);
+            let yb = y.select(&sample);
+            grow(&xb, &yb, &p.tree, &mut rng).unwrap()
+        })
+        .collect();
+    let classes = y.classes().map(|c| c.to_vec());
+    RandomForest::from_trees(trees, classes).unwrap()
+}
+
+/// Thread-count invariance for the forest build: `fit` must return a
+/// byte-identical [`RandomForest`] whether run under a 1- or 8-thread rayon pool,
+/// and it must equal the plainly-sequential reference. This is the forest-level
+/// analogue of `indexed_map_matches_sequential_reference`, and the guarantee the
+/// design leans on so a parallel training run reproduces a single-threaded one.
+#[cfg(feature = "parallel")]
+#[test]
+fn forest_matches_sequential_reference() {
+    let (x, y) = forest_golden_data();
+    let mut p = RandomForestParams::classifier_defaults();
+    p.n_estimators = 12;
+    p.tree.max_features = MaxFeatures::Sqrt; // sqrt(4)=2 → genuinely subsamples per node
+    let master_seed = 20260707;
+
+    let reference = sequential_forest(&x, &y, &p, master_seed);
+    for k in [1usize, 8] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(k)
+            .build()
+            .unwrap();
+        let got = pool.install(|| RandomForest::fit(&x, &y, &p, master_seed).unwrap());
+        assert_eq!(got, reference, "forest changed with {k} threads");
+    }
+}
+
+/// Freezes the whole forest grow+aggregate pipeline end to end (per-tree
+/// bootstrap draw → grow → soft-vote / summed-normalized MDI). A diff here means
+/// the fit or aggregation drifted and would silently change every forest built
+/// from a given seed. Values are for the fixed input above with `max_features =
+/// sqrt` (so the RNG genuinely drives both bootstrap and feature subsampling).
+#[test]
+fn forest_grow_golden() {
+    let (x, y) = forest_golden_data();
+    let mut p = RandomForestParams::classifier_defaults();
+    p.n_estimators = 5;
+    p.tree.max_features = MaxFeatures::Sqrt;
+    let forest = RandomForest::fit(&x, &y, &p, 20260707).unwrap();
+
+    let pred = forest.predict_class_indices(&x).unwrap();
+    let proba = forest.predict_proba(&x).unwrap();
+    let mdi = forest.feature_importances();
+
+    assert_eq!(pred, [0, 1, 2, 0, 1, 2, 1, 1, 2, 0, 2, 2]);
+
+    let expected_proba = [
+        [0.8, 0.0, 0.2],
+        [0.18, 0.82, 0.0],
+        [0.0, 0.2, 0.8],
+        [0.6, 0.3, 0.1],
+        [0.13333333333333333, 0.6666666666666666, 0.2],
+        [0.2, 0.0, 0.8],
+        [0.18, 0.82, 0.0],
+        [0.2, 0.5, 0.3],
+        [0.2, 0.0, 0.8],
+        [0.5333333333333333, 0.4666666666666666, 0.0],
+        [0.2, 0.2, 0.6],
+        [0.2, 0.3, 0.5],
+    ];
+    for (i, (got, exp)) in proba.iter().zip(&expected_proba).enumerate() {
+        for (j, (g, e)) in got.iter().zip(exp).enumerate() {
+            assert!((g - e).abs() < 1e-12, "proba[{i}][{j}] = {g} != {e}");
+        }
+    }
+
+    let expected_mdi = [
+        0.37086951169878,
+        0.2291603670422669,
+        0.33930164790755296,
+        0.06066847335140017,
+    ];
+    for (i, (g, e)) in mdi.iter().zip(&expected_mdi).enumerate() {
+        assert!((g - e).abs() < 1e-12, "mdi[{i}] = {g} != {e}");
+    }
 }

@@ -99,6 +99,43 @@ impl Targets {
             Targets::Numeric(_) => None,
         }
     }
+
+    /// Reindex the targets by the sample subset `idx`, returning targets whose
+    /// sample `k` is the original sample `idx[k]`. The bootstrap bridge that
+    /// pairs with [`FeatureMatrix::select_rows`](crate::FeatureMatrix::select_rows):
+    /// `idx` may repeat a row (with replacement) and need not be sorted.
+    ///
+    /// The categorical **`classes` set is preserved unchanged** — even if a
+    /// bootstrap sample omits a class entirely, `n_classes` (and therefore the
+    /// per-tree probability-column width) stays stable across the forest so
+    /// per-tree `value` vectors align for averaging. Panics if any index is
+    /// `>= n_samples` (indices come from a validated split/bootstrap draw).
+    pub fn select(&self, idx: &[usize]) -> Targets {
+        let n = self.n_samples();
+        match self {
+            Targets::Categorical { classes, codes } => {
+                let sub = idx
+                    .iter()
+                    .map(|&i| {
+                        assert!(i < n, "Targets::select: index {i} out of range [0, {n})");
+                        codes[i]
+                    })
+                    .collect();
+                Targets::Categorical {
+                    classes: classes.clone(),
+                    codes: sub,
+                }
+            }
+            Targets::Numeric(v) => Targets::Numeric(
+                idx.iter()
+                    .map(|&i| {
+                        assert!(i < n, "Targets::select: index {i} out of range [0, {n})");
+                        v[i]
+                    })
+                    .collect(),
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +170,40 @@ mod tests {
         assert!(Targets::numeric(&[]).is_err());
         assert!(Targets::numeric(&[1.0, f64::NAN]).is_err());
         assert!(Targets::numeric(&[1.0, f64::INFINITY]).is_err());
+    }
+
+    #[test]
+    fn select_reindexes_and_allows_repeats() {
+        let cat = Targets::categorical(&["a", "b", "c", "a"]).unwrap();
+        // Bootstrap-style draw: out of order, with a repeat.
+        let sub = cat.select(&[3, 3, 1]);
+        assert_eq!(sub.codes(), Some([0, 0, 1].as_slice())); // a, a, b
+        assert_eq!(sub.n_samples(), 3);
+
+        let num = Targets::numeric(&[1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(
+            num.select(&[2, 0, 2]),
+            Targets::numeric(&[3.0, 1.0, 3.0]).unwrap()
+        );
+    }
+
+    #[test]
+    fn select_preserves_full_class_set_when_a_class_is_absent() {
+        // A subset that omits class "c" must still carry all three classes so
+        // per-tree probability columns stay full-width across a bootstrap forest.
+        let cat = Targets::categorical(&["a", "b", "c"]).unwrap();
+        let sub = cat.select(&[0, 1]); // only a, b sampled
+        assert_eq!(sub.n_classes(), Some(3), "class set must survive selection");
+        assert_eq!(
+            sub.classes(),
+            Some(["a".to_string(), "b".into(), "c".into()].as_slice())
+        );
+        assert_eq!(sub.codes(), Some([0, 1].as_slice()));
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn select_panics_on_oob_index() {
+        Targets::numeric(&[1.0, 2.0]).unwrap().select(&[0, 2]);
     }
 }

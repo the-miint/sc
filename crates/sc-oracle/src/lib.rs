@@ -68,6 +68,9 @@ pub enum Payload {
     RocCurve(RocCurveCase),
     TreeClassifier(TreeClassifierCase),
     TreeRegressor(TreeRegressorCase),
+    ForestClassifier(ForestClassifierCase),
+    ForestRegressor(ForestRegressorCase),
+    ForestAggregate(ForestAggregateCase),
 }
 
 /// Accuracy / confusion / baseline, and — when `proba` is present — multiclass
@@ -201,6 +204,131 @@ pub struct TreeRegressorCase {
 pub struct TreeRegressorExpected {
     pub predict: Vec<f64>,
     pub mdi: Vec<f64>,
+}
+
+/// One tree of a **classifier** forest: the eight exported `tree_` arrays, with
+/// per-node `value` a class-proportion vector. Imported via `Tree::from_sklearn`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClsTree {
+    pub children_left: Vec<i64>,
+    pub children_right: Vec<i64>,
+    pub feature: Vec<i64>,
+    pub threshold: Vec<f64>,
+    pub value: Vec<Vec<f64>>,
+    pub impurity: Vec<f64>,
+    pub n_node_samples: Vec<i64>,
+    pub weighted_n_node_samples: Vec<f64>,
+}
+
+/// One tree of a **regressor** forest: like [`ClsTree`] but per-node `value` is a
+/// scalar (the node mean, stride 1).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegTree {
+    pub children_left: Vec<i64>,
+    pub children_right: Vec<i64>,
+    pub feature: Vec<i64>,
+    pub threshold: Vec<f64>,
+    pub value: Vec<f64>,
+    pub impurity: Vec<f64>,
+    pub n_node_samples: Vec<i64>,
+    pub weighted_n_node_samples: Vec<f64>,
+}
+
+/// A fitted `RandomForestClassifier`: every tree's exported internals, the class
+/// labels, a query table, and sklearn's **forest-level** `predict` /
+/// `predict_proba` / `feature_importances_`. The TIGHT arbiter for the
+/// soft-vote + summed-normalized-MDI aggregation (facts 1 and 3).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestClassifierCase {
+    pub trees: Vec<ClsTree>,
+    pub n_classes: usize,
+    pub classes: Vec<String>,
+    pub n_features: usize,
+    pub criterion: String,
+    pub test_coo: CooTable,
+    pub expected: ForestClassifierExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestClassifierExpected {
+    pub predict: Vec<usize>,
+    pub proba: Vec<Vec<f64>>,
+    pub mdi: Vec<f64>,
+}
+
+/// A fitted `RandomForestRegressor`: like [`ForestClassifierCase`] but with
+/// scalar-`value` trees and real-valued `predict` (the TIGHT arbiter for fact 2).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestRegressorCase {
+    pub trees: Vec<RegTree>,
+    pub n_features: usize,
+    pub test_coo: CooTable,
+    pub expected: ForestRegressorExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestRegressorExpected {
+    pub predict: Vec<f64>,
+    pub mdi: Vec<f64>,
+}
+
+/// One empirically-calibrated score band for the AGGREGATE tier. `metric` is
+/// `"accuracy"` / `"r2"` / `"mse"` for a scored band, or `"invariant"` for a
+/// robustness case that asserts only shape invariants (no score check).
+/// `min`/`max`/`mean`/`std` summarize sklearn's score over K seeds on the fixed
+/// split; a result passes when it lands in `[min - margin, max + margin]` where
+/// `margin = margin_abs + margin_rel * |band-edge|`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AggregateBand {
+    pub metric: String,
+    pub min: f64,
+    pub max: f64,
+    pub mean: f64,
+    pub std: f64,
+    pub margin_abs: f64,
+    pub margin_rel: f64,
+}
+
+impl AggregateBand {
+    /// Whether this band is a scored one (vs an `"invariant"` robustness case).
+    pub fn is_invariant(&self) -> bool {
+        self.metric == "invariant"
+    }
+
+    /// Whether `got` lands within the margin-widened band.
+    pub fn contains(&self, got: f64) -> bool {
+        let lo = self.min - (self.margin_abs + self.margin_rel * self.min.abs());
+        let hi = self.max + (self.margin_abs + self.margin_rel * self.max.abs());
+        (lo..=hi).contains(&got)
+    }
+}
+
+/// An AGGREGATE-tier case: fit our forest on a fixed injected split of a whole
+/// dataset and assert the test score lands inside a band calibrated from
+/// sklearn's own seed-to-seed spread, and that importance ranking is
+/// rank-correlated with sklearn's mean importances. Classification carries an
+/// accuracy `band`; regression carries an r² `band` plus an `mse_band`.
+///
+/// Targets arrive as raw per-sample `labels` (classification) or `values`
+/// (regression) in dataset-sample order, so the Rust side rebuilds them through
+/// the same sorted-unique encoding sklearn used.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestAggregateCase {
+    pub task: String,
+    pub data_coo: CooTable,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub values: Option<Vec<f64>>,
+    pub train_idx: Vec<usize>,
+    pub test_idx: Vec<usize>,
+    pub n_estimators: usize,
+    pub band: AggregateBand,
+    #[serde(default)]
+    pub mse_band: Option<AggregateBand>,
+    pub ref_importances: Vec<f64>,
+    pub rank_corr_floor: f64,
+    pub rank_corr_margin: f64,
 }
 
 /// Load every `*.json` fixture in `dir`, sorted by path for stable test order.

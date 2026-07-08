@@ -27,6 +27,10 @@ parallel = ["dep:rayon"]
 
 [dev-dependencies]
 sc-oracle = { path = "../sc-oracle" }
+# Already in the graph via the optional `parallel` dependency; declared here so
+# the `parallel`-gated thread-count-invariance test in tests/determinism.rs can
+# drive explicit rayon thread pools (mirroring exec.rs's own unit test).
+rayon = "1"
 
 [lints]
 workspace = true
