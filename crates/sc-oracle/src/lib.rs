@@ -71,6 +71,8 @@ pub enum Payload {
     ForestClassifier(ForestClassifierCase),
     ForestRegressor(ForestRegressorCase),
     ForestAggregate(ForestAggregateCase),
+    RfeTight(RfeTightCase),
+    RfecvAggregate(RfecvAggregateCase),
 }
 
 /// Accuracy / confusion / baseline, and — when `proba` is present — multiclass
@@ -329,6 +331,64 @@ pub struct ForestAggregateCase {
     pub ref_importances: Vec<f64>,
     pub rank_corr_floor: f64,
     pub rank_corr_margin: f64,
+}
+
+/// TIGHT-tier RFE bookkeeping: a mock estimator returning `importances` (distinct,
+/// so elimination is unambiguous) drives sklearn 1.4.2 `RFE`/`RFECV`, and we
+/// assert our deterministic bookkeeping reproduces the results exactly. `step` is
+/// sklearn's raw step (an int `>= 1`, or a fraction `< 1`); `min_features_to_select`
+/// is 1 (the q2 config). Elimination runs to 1 feature (`rfe_ranking`/`rfe_support`
+/// from `RFE(n_features_to_select=1)`); the mock's scripted scores yield the curve
+/// (`grid_scores` ascending, aligned to `grid_n_features`) and `n_optimal`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RfeTightCase {
+    pub importances: Vec<f64>,
+    pub step: f64,
+    pub min_features_to_select: usize,
+    pub n_features: usize,
+    pub expected: RfeTightExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RfeTightExpected {
+    /// sklearn's resolved per-round removal count.
+    pub resolved_step: usize,
+    /// `RFE(n_features_to_select=1).ranking_` (1 == selected).
+    pub rfe_ranking: Vec<usize>,
+    /// `RFE(n_features_to_select=1).support_`.
+    pub rfe_support: Vec<bool>,
+    /// The score-curve feature counts, ascending (q2's reconstruction).
+    pub grid_n_features: Vec<i64>,
+    /// `RFECV.cv_results_['mean_test_score']`, ascending by feature count.
+    pub grid_scores: Vec<f64>,
+    /// `RFECV.n_features_` (chosen count).
+    pub n_optimal: usize,
+}
+
+/// AGGREGATE-tier: end-to-end RFECV selected-feature overlap vs q2. `reference_sets`
+/// are q2's `RFECV` selected feature-index sets over K seeds (same config as ours);
+/// `jaccard_floor` is the min pairwise Jaccard among them (a self-consistency
+/// floor). Our selection must overlap q2's at least `jaccard_floor - jaccard_margin`
+/// (mean Jaccard vs the reference sets), and the chosen count must land in
+/// `[n_optimal_min, n_optimal_max]` widened by `n_optimal_margin`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RfecvAggregateCase {
+    pub task: String,
+    pub data_coo: CooTable,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub values: Option<Vec<f64>>,
+    pub step: f64,
+    pub n_splits: usize,
+    pub n_estimators: usize,
+    pub min_features_to_select: usize,
+    pub reference_sets: Vec<Vec<usize>>,
+    pub jaccard_floor: f64,
+    pub jaccard_margin: f64,
+    pub n_optimal_min: usize,
+    pub n_optimal_max: usize,
+    pub n_optimal_margin: usize,
 }
 
 /// Load every `*.json` fixture in `dir`, sorted by path for stable test order.

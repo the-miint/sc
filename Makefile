@@ -35,6 +35,7 @@ regen-fixtures:
 	$(ORACLE_PYTHON) oracle/generator/gen_metrics.py
 	$(ORACLE_PYTHON) oracle/generator/gen_tree.py
 	$(ORACLE_PYTHON) oracle/generator/gen_forest.py
+	$(ORACLE_PYTHON) oracle/generator/gen_rfe.py
 
 clean:
 	$(CARGO) clean

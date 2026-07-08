@@ -138,6 +138,38 @@ impl FeatureMatrix {
             values,
         }
     }
+
+    /// Materialize the feature-column subset `idx` as a new matrix whose columns
+    /// are remapped to `0..idx.len()` in the order given (sample rows unchanged) —
+    /// the bridge RFECV uses to fit on a surviving feature subset.
+    ///
+    /// Cheap in CSC: each chosen column's stored entries are already contiguous
+    /// and row-sorted, so this copies slices and renumbers columns (no resort /
+    /// no dup-summing). `idx` may repeat a column (its entries are copied into
+    /// each target column). Panics if any index is `>= n_features`.
+    pub fn select_columns(&self, idx: &[usize]) -> FeatureMatrix {
+        let mut col_ptr = vec![0usize; idx.len() + 1];
+        let mut row_idx = Vec::new();
+        let mut values = Vec::new();
+        for (new_c, &old) in idx.iter().enumerate() {
+            assert!(
+                old < self.n_features,
+                "select_columns: index {old} out of range [0, {})",
+                self.n_features
+            );
+            let (s, e) = (self.col_ptr[old], self.col_ptr[old + 1]);
+            row_idx.extend_from_slice(&self.row_idx[s..e]);
+            values.extend_from_slice(&self.values[s..e]);
+            col_ptr[new_c + 1] = col_ptr[new_c] + (e - s);
+        }
+        FeatureMatrix {
+            n_samples: self.n_samples,
+            n_features: idx.len(),
+            col_ptr,
+            row_idx,
+            values,
+        }
+    }
 }
 
 /// Assemble CSC arrays from `(col, row, val)` triples: sort by `(col, row)`, sum
@@ -226,5 +258,34 @@ mod tests {
         assert_eq!(sub.n_samples(), 2);
         assert_eq!(sub.n_features(), 2);
         assert_eq!(dense(&sub), vec![vec![0.0, 4.0], vec![0.0, 2.0]]);
+    }
+
+    #[test]
+    fn select_columns_materializes_subset() {
+        // 3 samples x 3 features, one nonzero per (sample, feature) diagonal-ish.
+        let m = FeatureMatrix::from_coo(
+            3,
+            3,
+            &[0, 1, 2, 0, 2],
+            &[0, 1, 2, 2, 0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+        )
+        .unwrap();
+        // dense = [[1,0,4],[0,2,0],[5,0,3]]. Take features [2, 0] → new col 0 =
+        // old 2, new col 1 = old 0 (rows unchanged).
+        let sub = m.select_columns(&[2, 0]);
+        assert_eq!(sub.n_samples(), 3);
+        assert_eq!(sub.n_features(), 2);
+        assert_eq!(
+            dense(&sub),
+            vec![vec![4.0, 1.0], vec![0.0, 0.0], vec![3.0, 5.0]]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn select_columns_panics_on_oob() {
+        let m = FeatureMatrix::from_coo(2, 2, &[0, 1], &[0, 1], &[1.0, 2.0]).unwrap();
+        m.select_columns(&[0, 2]);
     }
 }

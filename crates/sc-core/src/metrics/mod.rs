@@ -17,5 +17,5 @@ pub mod roc;
 pub use classification::{
     accuracy, accuracy_ratio, baseline_accuracy, confusion_matrix, confusion_matrix_normalized,
 };
-pub use regression::{linear_regress, RegressionReport};
+pub use regression::{linear_regress, r2_score, RegressionReport};
 pub use roc::{auc, roc_auc_macro, roc_auc_micro, roc_auc_per_class, roc_curve, RocCurve};

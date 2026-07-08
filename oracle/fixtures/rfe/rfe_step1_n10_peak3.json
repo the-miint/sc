@@ -1,0 +1,82 @@
+{
+  "expected": {
+    "grid_n_features": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "grid_scores": [
+      0.51,
+      0.52,
+      0.9,
+      0.54,
+      0.55,
+      0.56,
+      0.5700000000000001,
+      0.58,
+      0.59,
+      0.6
+    ],
+    "n_optimal": 3,
+    "resolved_step": 1,
+    "rfe_ranking": [
+      5,
+      9,
+      1,
+      7,
+      3,
+      8,
+      6,
+      2,
+      4,
+      10
+    ],
+    "rfe_support": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "generator": {
+    "numpy": "1.26.4",
+    "qiime2_amplicon": "2024.10",
+    "scipy": "1.13.0",
+    "seed": 20260707,
+    "sklearn": "1.4.2"
+  },
+  "id": "rfe_step1_n10_peak3",
+  "importances": [
+    0.55,
+    0.11,
+    0.99,
+    0.33,
+    0.77,
+    0.22,
+    0.44,
+    0.88,
+    0.66,
+    0.05
+  ],
+  "kind": "rfe_tight",
+  "min_features_to_select": 1,
+  "n_features": 10,
+  "step": 1.0,
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09
+  }
+}

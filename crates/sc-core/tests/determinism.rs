@@ -4,8 +4,9 @@
 use std::collections::HashSet;
 
 use sc_core::{
-    grow, indexed_map, k_fold, stratified_k_fold, train_test_split, tree_seed, DetRng, Error,
-    FeatureMatrix, MaxFeatures, RandomForest, RandomForestParams, Targets, TestSize, TreeParams,
+    grow, indexed_map, k_fold, rfecv, stratified_k_fold, train_test_split, tree_seed, DetRng,
+    Error, FeatureMatrix, MaxFeatures, RandomForest, RandomForestParams, RfeStep, RfecvParams,
+    Targets, TestSize, TreeParams,
 };
 // Only the `parallel`-gated invariance test names `Tree` (via `sequential_forest`).
 #[cfg(feature = "parallel")]
@@ -333,5 +334,35 @@ fn forest_grow_golden() {
     ];
     for (i, (g, e)) in mdi.iter().zip(&expected_mdi).enumerate() {
         assert!((g - e).abs() < 1e-12, "mdi[{i}] = {g} != {e}");
+    }
+}
+
+/// Freezes the whole RFECV pipeline end to end (seeded CV folds → per-round
+/// forest refits → importance-ranked elimination → mean-score curve → optimal
+/// count → final selection). A diff means the RFE mechanics or the forest drifted
+/// and would silently change every selection from a given seed. Values are for
+/// the fixed 12-sample, 4-feature, 3-class input above.
+#[test]
+fn rfecv_golden() {
+    let (x, y) = forest_golden_data();
+    let mut p = RfecvParams::classifier_defaults();
+    p.forest.n_estimators = 8;
+    p.forest.tree.max_features = MaxFeatures::Sqrt;
+    p.step = RfeStep::Count(1);
+    p.n_splits = 3;
+    let r = rfecv(&x, &y, &p, 20260707).unwrap();
+
+    assert_eq!(r.grid_n_features, [1, 2, 3, 4]);
+    assert_eq!(r.selected, [0, 2]);
+    assert_eq!(r.n_optimal, 2);
+    assert_eq!(r.ranking, [1, 2, 1, 3]);
+    let expected_scores = [
+        0.05555555555555555,
+        0.16666666666666666,
+        0.05555555555555555,
+        0.0,
+    ];
+    for (i, (g, e)) in r.grid_scores.iter().zip(&expected_scores).enumerate() {
+        assert!((g - e).abs() < 1e-12, "grid_scores[{i}] = {g} != {e}");
     }
 }

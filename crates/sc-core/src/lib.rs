@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod partition;
 #[cfg(feature = "persist")]
 pub mod persist;
+pub mod rfe;
 mod rng;
 pub mod tree;
 
@@ -29,6 +30,7 @@ pub use forest::{MaxSamples, RandomForest, RandomForestParams};
 pub use partition::{k_fold, stratified_k_fold, train_test_split, CvFolds, Split, TestSize};
 #[cfg(feature = "persist")]
 pub use persist::ModelBundle;
+pub use rfe::{rfecv, RfeStep, RfecvParams, RfecvResult};
 pub use rng::{tree_seed, DetRng};
 pub use tree::criterion::{entropy, gini, variance};
 pub use tree::{grow, Criterion, MaxFeatures, MinSamples, Task, Tree, TreeParams};
