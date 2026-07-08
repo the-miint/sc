@@ -11,6 +11,7 @@
 //! RNG boundary with per-tree seed derivation, and a parallel/sequential
 //! execution shim whose output is invariant to thread count.
 
+mod cv;
 pub mod data;
 mod error;
 mod exec;
@@ -22,6 +23,7 @@ pub mod persist;
 pub mod rfe;
 mod rng;
 pub mod tree;
+pub mod tuning;
 
 pub use data::{FeatureMatrix, Targets};
 pub use error::{Error, Result};
@@ -34,3 +36,8 @@ pub use rfe::{rfecv, RfeStep, RfecvParams, RfecvResult};
 pub use rng::{tree_seed, DetRng};
 pub use tree::criterion::{entropy, gini, variance};
 pub use tree::{grow, Criterion, MaxFeatures, MinSamples, Task, Tree, TreeParams};
+#[cfg(feature = "persist")]
+pub use tuning::fit_tuned;
+pub use tuning::{
+    rf_classifier_grid, rf_regressor_grid, tune, Candidate, ParamAxis, TuningParams, TuningResult,
+};

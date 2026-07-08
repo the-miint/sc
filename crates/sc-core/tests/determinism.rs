@@ -4,9 +4,9 @@
 use std::collections::HashSet;
 
 use sc_core::{
-    grow, indexed_map, k_fold, rfecv, stratified_k_fold, train_test_split, tree_seed, DetRng,
-    Error, FeatureMatrix, MaxFeatures, RandomForest, RandomForestParams, RfeStep, RfecvParams,
-    Targets, TestSize, TreeParams,
+    grow, indexed_map, k_fold, rfecv, stratified_k_fold, train_test_split, tree_seed, tune,
+    Criterion, DetRng, Error, FeatureMatrix, MaxFeatures, ParamAxis, RandomForest,
+    RandomForestParams, RfeStep, RfecvParams, Targets, TestSize, TreeParams, TuningParams,
 };
 // Only the `parallel`-gated invariance test names `Tree` (via `sequential_forest`).
 #[cfg(feature = "parallel")]
@@ -365,4 +365,80 @@ fn rfecv_golden() {
     for (i, (g, e)) in r.grid_scores.iter().zip(&expected_scores).enumerate() {
         assert!((g - e).abs() < 1e-12, "grid_scores[{i}] = {g} != {e}");
     }
+}
+
+/// The fixed reduced tuning grid the golden test searches (size 8: 2·2·2), with
+/// `n_iter < grid_size` so sampling-without-replacement is genuinely exercised.
+fn tuning_golden_grid() -> Vec<ParamAxis> {
+    vec![
+        ParamAxis::MaxDepth(vec![Some(2), None]),
+        ParamAxis::MaxFeatures(vec![MaxFeatures::All, MaxFeatures::Sqrt]),
+        ParamAxis::Criterion(vec![Criterion::Gini, Criterion::Entropy]),
+    ]
+}
+
+/// Freezes the whole tuning pipeline end to end (candidate sampling without
+/// replacement → mixed-radix decode → seeded CV folds → per-fold forest refits →
+/// mean-score → argmax). A diff means the sampler, the decode radix order, the
+/// fold/fit seeding, the CV scoring, or the tie-break drifted, which would
+/// silently change every tuned model from a given seed. Values are for the fixed
+/// 12-sample, 4-feature, 3-class input above with a size-8 grid and n_iter=4 (so
+/// sampling-without-replacement is genuinely exercised).
+#[test]
+fn tuning_golden() {
+    let (x, y) = forest_golden_data();
+    let mut base = RandomForestParams::classifier_defaults();
+    base.n_estimators = 8;
+    base.tree.max_features = MaxFeatures::Sqrt;
+    let p = TuningParams {
+        base,
+        grid: tuning_golden_grid(),
+        n_iter: 4,
+        n_splits: 3,
+    };
+    let r = tune(&x, &y, &p, 20260707).unwrap();
+
+    // The sampled candidate sequence (pins the sampler + decode radix order).
+    let seq: Vec<(Option<usize>, MaxFeatures, Criterion)> = r
+        .candidates
+        .iter()
+        .map(|c| {
+            (
+                c.params.tree.max_depth,
+                c.params.tree.max_features,
+                c.params.tree.criterion,
+            )
+        })
+        .collect();
+    assert_eq!(
+        seq,
+        vec![
+            (None, MaxFeatures::Sqrt, Criterion::Gini),
+            (Some(2), MaxFeatures::All, Criterion::Gini),
+            (None, MaxFeatures::All, Criterion::Gini),
+            (Some(2), MaxFeatures::All, Criterion::Entropy),
+        ]
+    );
+
+    // Mean CV scores (pins fold seeding + per-fit forests + scoring).
+    let expected_scores = [
+        0.0,
+        0.1111111111111111,
+        0.16666666666666666,
+        0.05555555555555555,
+    ];
+    for (i, (c, e)) in r.candidates.iter().zip(&expected_scores).enumerate() {
+        assert!(
+            (c.mean_cv_score - e).abs() < 1e-12,
+            "candidate {i} score {} != {e}",
+            c.mean_cv_score
+        );
+    }
+
+    // The winner (pins the argmax tie-break).
+    assert_eq!(r.best_index, 2);
+    assert!((r.best_score - 0.16666666666666666).abs() < 1e-12);
+    assert_eq!(r.best_params.tree.max_depth, None);
+    assert_eq!(r.best_params.tree.max_features, MaxFeatures::All);
+    assert_eq!(r.best_params.tree.criterion, Criterion::Gini);
 }

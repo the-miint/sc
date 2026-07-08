@@ -23,9 +23,9 @@
 
 mod bookkeeping;
 
+use crate::cv::{argmax_first, score_fold};
 use crate::data::{FeatureMatrix, Targets};
 use crate::forest::{RandomForest, RandomForestParams};
-use crate::metrics::{accuracy, r2_score};
 use crate::partition::{k_fold, stratified_k_fold};
 use crate::rng::tree_seed;
 use crate::{Error, Result};
@@ -180,7 +180,7 @@ pub fn rfecv(
     let inv = 1.0 / folds.n_splits() as f64;
     let grid_scores: Vec<f64> = score_sum.iter().rev().map(|s| s * inv).collect();
     let grid_n_features: Vec<usize> = grid.iter().rev().copied().collect();
-    let n_optimal = grid_n_features[bookkeeping::argmax_first(&grid_scores)];
+    let n_optimal = grid_n_features[argmax_first(&grid_scores)];
 
     // Final RFE on all data down to n_optimal → support_/ranking_.
     let final_rfe = bookkeeping::run_rfe(n_features, step, n_optimal, |surviving| {
@@ -198,18 +198,6 @@ pub fn rfecv(
         grid_n_features,
         grid_scores,
     })
-}
-
-/// Score one CV fold: accuracy (classification) or coefficient-of-determination
-/// R² (regression) — matching sklearn's default estimator `.score()`. The forest
-/// was fit on the same surviving columns, so the feature counts align.
-fn score_fold(forest: &RandomForest, x_test: &FeatureMatrix, y_test: &Targets) -> f64 {
-    match y_test {
-        Targets::Categorical { codes, .. } => {
-            accuracy(codes, &forest.predict_class_indices(x_test).unwrap())
-        }
-        Targets::Numeric(values) => r2_score(values, &forest.predict_values(x_test).unwrap()),
-    }
 }
 
 #[cfg(feature = "persist")]

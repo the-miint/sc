@@ -7,7 +7,8 @@
 #![cfg(feature = "persist")]
 
 use sc_core::{
-    FeatureMatrix, MaxFeatures, ModelBundle, RandomForest, RandomForestParams, Targets, Task,
+    fit_tuned, FeatureMatrix, MaxFeatures, ModelBundle, RandomForest, RandomForestParams, Targets,
+    Task, TuningParams,
 };
 
 fn dense(rows: &[&[f64]]) -> FeatureMatrix {
@@ -129,6 +130,32 @@ fn round_trip_preserves_metadata() {
 fn serialization_is_byte_deterministic() {
     // Two serializations of the same fixed model are identical.
     assert_eq!(fixed_bundle().to_bytes(), fixed_bundle().to_bytes());
+}
+
+#[test]
+fn fit_tuned_round_trip() {
+    // Tune on the fixed 12-sample, 3-class problem, then round-trip the bundle.
+    let (x, _, _) = fixed_classifier();
+    let y = Targets::categorical(&["a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c"])
+        .unwrap();
+    let mut p = TuningParams::classifier_defaults();
+    p.base.n_estimators = 6;
+    p.base.tree.max_features = MaxFeatures::Sqrt;
+    p.n_iter = 5;
+    p.n_splits = 3;
+    let (bundle, result) = fit_tuned(&x, &y, &p, 20260707).unwrap();
+
+    // The bundle carries the *tuned* params (not the defaults), and no RFE slot.
+    assert_eq!(bundle.params.as_ref(), Some(&result.best_params));
+    assert!(bundle.rfe_selection.is_none());
+
+    // It round-trips byte-identically and predicts the same after reload.
+    let back = ModelBundle::from_bytes(&bundle.to_bytes()).unwrap();
+    assert_eq!(back, bundle, "tuned bundle did not round-trip");
+    assert_eq!(
+        back.forest.predict_class_indices(&x).unwrap(),
+        bundle.forest.predict_class_indices(&x).unwrap()
+    );
 }
 
 // The byte-exact golden-fixture stability test lives inline in

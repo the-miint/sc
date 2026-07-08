@@ -86,21 +86,6 @@ pub(crate) fn curve_x_axis(n_features: usize, step: usize, n_grid: usize) -> Vec
     x
 }
 
-/// Index of the maximum, taking the first (lowest-index) max on ties — matching
-/// `np.argmax`. On the ascending-by-feature-count score curve, the first max is
-/// the **fewest** features, which is sklearn RFECV's optimal-count tie-break.
-pub(crate) fn argmax_first(scores: &[f64]) -> usize {
-    let mut best = 0;
-    let mut best_v = scores[0];
-    for (i, &s) in scores.iter().enumerate().skip(1) {
-        if s > best_v {
-            best_v = s;
-            best = i;
-        }
-    }
-    best
-}
-
 /// The outcome of an RFE elimination: sklearn's `support_` (kept mask) and
 /// `ranking_` (1 == selected; higher == eliminated earlier).
 pub(crate) struct Rfe {
@@ -201,13 +186,6 @@ mod tests {
         let r2 = run_rfe(6, 2, 1, importances_of).unwrap();
         assert_eq!(r2.ranking, vec![3, 4, 1, 3, 2, 4]);
     }
-
-    #[test]
-    fn argmax_first_takes_fewest_on_ties() {
-        // Ascending-by-count curve; tie between index 2 and 4 -> first (fewer).
-        assert_eq!(argmax_first(&[0.5, 0.6, 0.9, 0.8, 0.9, 0.75]), 2);
-        assert_eq!(argmax_first(&[0.99, 0.6, 0.7]), 0);
-    }
 }
 
 /// TIGHT-tier oracle: the deterministic bookkeeping reproduces scikit-learn 1.4.2
@@ -218,6 +196,7 @@ mod tests {
 #[cfg(test)]
 mod oracle {
     use super::*;
+    use crate::cv::argmax_first;
     use sc_oracle::{load_dir, OracleCase, Payload};
 
     fn step_of(step: f64) -> RfeStep {
