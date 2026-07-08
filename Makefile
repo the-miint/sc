@@ -22,6 +22,9 @@ test-seq:
 
 wasm:
 	$(CARGO) build -p sc-core --target $(WASM_TARGET) --no-default-features
+	# Persistence must also be wasm-clean (serde + postcard, byte buffers only),
+	# so the M9 C-API and M11 WASM packaging inherit a working save/load path.
+	$(CARGO) build -p sc-core --target $(WASM_TARGET) --no-default-features --features persist
 
 deny:
 	$(CARGO) deny check

@@ -31,8 +31,10 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: build wasm32
+      - name: build wasm32 (minimal core)
         run: cargo build -p sc-core --target wasm32-unknown-unknown --no-default-features
+      - name: build wasm32 (with persist)
+        run: cargo build -p sc-core --target wasm32-unknown-unknown --no-default-features --features persist
 
   deny:
     runs-on: ubuntu-latest

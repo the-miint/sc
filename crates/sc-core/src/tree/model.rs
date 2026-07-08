@@ -321,6 +321,44 @@ impl Tree {
         self.weighted_n_node_samples[node]
     }
 
+    // Whole-array getters used by the `persist` module to read a tree's
+    // struct-of-arrays in one shot (no per-node reassembly). Kept `pub(crate)`
+    // and `persist`-gated: the public surface stays the per-node accessors +
+    // `from_sklearn`, and they'd be dead code without the feature.
+    #[cfg(feature = "persist")]
+    pub(crate) fn children_left_slice(&self) -> &[i32] {
+        &self.children_left
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn children_right_slice(&self) -> &[i32] {
+        &self.children_right
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn feature_slice(&self) -> &[i32] {
+        &self.feature
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn threshold_slice(&self) -> &[f64] {
+        &self.threshold
+    }
+    /// The flattened `n_nodes * value_stride` value array.
+    #[cfg(feature = "persist")]
+    pub(crate) fn value_slice(&self) -> &[f64] {
+        &self.value
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn impurity_slice(&self) -> &[f64] {
+        &self.impurity
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn n_node_samples_slice(&self) -> &[u64] {
+        &self.n_node_samples
+    }
+    #[cfg(feature = "persist")]
+    pub(crate) fn weighted_n_node_samples_slice(&self) -> &[f64] {
+        &self.weighted_n_node_samples
+    }
+
     /// Route one already-densified feature row to its leaf node id. The shared
     /// traversal: left when `(x as f32 as f64) <= threshold`. `row` must have
     /// length `n_features`.
