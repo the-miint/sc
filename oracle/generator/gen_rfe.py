@@ -115,7 +115,7 @@ def q2_x_axis(n_features, step, n_grid):
     return x
 
 
-def tight_case(cid, importances, step, scores_by_count):
+def tight_case(cid, importances, step, scores_by_count, rfe_target=None):
     global SCORE_BY_COUNT
     importances = np.asarray(importances, float)
     n = len(importances)
@@ -130,6 +130,27 @@ def tight_case(cid, importances, step, scores_by_count):
     mts = rfecv.cv_results_["mean_test_score"]
     x = q2_x_axis(n, step, len(mts))
 
+    expected = {
+        "resolved_step": int(resolved_step(step, n)),
+        "rfe_ranking": rfe.ranking_.astype(int).tolist(),
+        "rfe_support": rfe.support_.astype(bool).tolist(),
+        "grid_n_features": [int(v) for v in x],
+        "grid_scores": [float(v) for v in mts],
+        "n_optimal": int(rfecv.n_features_),
+    }
+
+    # Optionally exercise elimination down to a target > 1 (the count RFECV runs
+    # its *final* elimination to, and hence the run_rfe path that ships the
+    # selection). Ground truth is a real sklearn RFE at that target. Kept as a
+    # pure-RFE check, independent of the RFECV x-axis machinery above (q2's x-axis
+    # reconstruction is a min_features_to_select==1 formula).
+    if rfe_target is not None:
+        assert rfe_target > 1, "rfe_target is for the >1 gap; down-to-1 is covered"
+        rfe_k = RFE(Mock(), n_features_to_select=rfe_target, step=step).fit(X, y)
+        expected["rfe_target"] = int(rfe_target)
+        expected["rfe_ranking_at_target"] = rfe_k.ranking_.astype(int).tolist()
+        expected["rfe_support_at_target"] = rfe_k.support_.astype(bool).tolist()
+
     write_case({
         "id": cid,
         "kind": "rfe_tight",
@@ -139,14 +160,7 @@ def tight_case(cid, importances, step, scores_by_count):
         "step": float(step),
         "min_features_to_select": 1,
         "n_features": int(n),
-        "expected": {
-            "resolved_step": int(resolved_step(step, n)),
-            "rfe_ranking": rfe.ranking_.astype(int).tolist(),
-            "rfe_support": rfe.support_.astype(bool).tolist(),
-            "grid_n_features": [int(v) for v in x],
-            "grid_scores": [float(v) for v in mts],
-            "n_optimal": int(rfecv.n_features_),
-        },
+        "expected": expected,
     })
 
 
@@ -156,16 +170,24 @@ def gen_tight():
     # step=1 -> grid counts ascending [1..6]; peak at 4.
     tight_case("rfe_step1_peak4", imp6, 1,
                {1: .55, 2: .60, 3: .70, 4: .92, 5: .80, 6: .74})
-    # step=2 -> grid [1,2,4,6]; peak at 4.
+    # step=2 -> grid [1,2,4,6]; peak at 4. Also exercise run_rfe at target=3, whose
+    # final round clamps the step (6 -> 4 -> 3, removing 1 not 2).
     tight_case("rfe_step2_peak4", imp6, 2,
-               {1: .40, 2: .60, 4: .90, 6: .55})
+               {1: .40, 2: .60, 4: .90, 6: .55}, rfe_target=3)
     # fractional step 0.34 -> resolved 2 -> grid [1,2,4,6]; peak at 2 (fewer wins).
     tight_case("rfe_frac034_peak2", imp6, 0.34,
                {1: .50, 2: .91, 4: .70, 6: .60})
-    # larger: 10 distinct importances, step=1, peak at 3.
+    # larger: 10 distinct importances, step=1, peak at 3. Also exercise run_rfe at
+    # target=4 (a plain, unclamped multi-round elimination below the full count).
     imp10 = [0.55, 0.11, 0.99, 0.33, 0.77, 0.22, 0.44, 0.88, 0.66, 0.05]
     tight_case("rfe_step1_n10_peak3", imp10, 1,
-               {c: (0.9 if c == 3 else 0.5 + 0.01 * c) for c in range(1, 11)})
+               {c: (0.9 if c == 3 else 0.5 + 0.01 * c) for c in range(1, 11)},
+               rfe_target=4)
+    # Genuine tie in the score curve: counts 2 and 4 share the max, so n_optimal
+    # pins np.argmax's fewest-features-on-ties rule against real sklearn (the other
+    # cases all have a unique max).
+    tight_case("rfe_step1_tie", imp6, 1,
+               {1: .50, 2: .90, 3: .70, 4: .90, 5: .80, 6: .60})
 
 
 # --------------------------------------------------------------------------- #

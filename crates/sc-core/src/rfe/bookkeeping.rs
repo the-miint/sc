@@ -24,6 +24,16 @@ pub(crate) fn resolve_step(step: RfeStep, n_features: usize) -> Result<usize> {
     }
 }
 
+/// Features to eliminate this round: `step`, clamped so the surviving count never
+/// undershoots `target`. This is the *single* definition of sklearn's per-round
+/// removal, shared by [`grid_counts`], [`run_rfe`], and — via the precomputed grid
+/// — [`super::rfecv`], so all three stay in lockstep (the TIGHT-tier parity rides
+/// on this arithmetic never drifting between call sites). Precondition:
+/// `remaining >= target`.
+pub(crate) fn clamped_step(step: usize, remaining: usize, target: usize) -> usize {
+    step.min(remaining - target)
+}
+
 /// The **descending** sequence of surviving feature counts at which a fit/score
 /// happens, from `n_features` down to `min_features` (the last entry is exactly
 /// `min_features`), removing `step` per round (clamped on the final round).
@@ -34,7 +44,7 @@ pub(crate) fn grid_counts(n_features: usize, step: usize, min_features: usize) -
     let mut c = n_features;
     while c > min_features {
         counts.push(c);
-        c -= step.min(c - min_features);
+        c -= clamped_step(step, c, min_features);
     }
     counts.push(min_features);
     counts
@@ -119,7 +129,7 @@ where
     while surviving.len() > target {
         let importances = importances_of(&surviving)?;
         debug_assert_eq!(importances.len(), surviving.len());
-        let remove = step.min(surviving.len() - target);
+        let remove = clamped_step(step, surviving.len(), target);
         for &local in &lowest_indices(&importances, remove) {
             support[surviving[local]] = false;
         }
@@ -249,6 +259,27 @@ mod oracle {
             .unwrap();
             assert_eq!(rfe.ranking, c.expected.rfe_ranking, "{id}: ranking_");
             assert_eq!(rfe.support, c.expected.rfe_support, "{id}: support_");
+
+            // If the fixture opts in, also check run_rfe at a target > 1 — the
+            // code path rfecv drives its *final* elimination through (and hence
+            // the one that ships the selection), which the down-to-1 case above
+            // never exercises. Ground truth is a real sklearn RFE at that target.
+            if let Some(target) = c.expected.rfe_target {
+                let importances_of = |surv: &[usize]| -> Result<Vec<f64>> {
+                    Ok(surv.iter().map(|&i| c.importances[i]).collect())
+                };
+                let rfe_k = run_rfe(c.n_features, resolved, target, importances_of).unwrap();
+                let exp_rank = c.expected.rfe_ranking_at_target.as_ref().unwrap();
+                let exp_supp = c.expected.rfe_support_at_target.as_ref().unwrap();
+                assert_eq!(
+                    rfe_k.ranking, *exp_rank,
+                    "{id}: ranking_ at target {target}"
+                );
+                assert_eq!(
+                    rfe_k.support, *exp_supp,
+                    "{id}: support_ at target {target}"
+                );
+            }
 
             // Score-curve x-axis (q2's reconstruction) and the optimal-count rule.
             let x = curve_x_axis(c.n_features, resolved, c.expected.grid_scores.len());

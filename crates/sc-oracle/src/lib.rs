@@ -339,7 +339,10 @@ pub struct ForestAggregateCase {
 /// sklearn's raw step (an int `>= 1`, or a fraction `< 1`); `min_features_to_select`
 /// is 1 (the q2 config). Elimination runs to 1 feature (`rfe_ranking`/`rfe_support`
 /// from `RFE(n_features_to_select=1)`); the mock's scripted scores yield the curve
-/// (`grid_scores` ascending, aligned to `grid_n_features`) and `n_optimal`.
+/// (`grid_scores` ascending, aligned to `grid_n_features`) and `n_optimal`. A case
+/// may also carry `rfe_target > 1` (with matching `rfe_*_at_target` expectations)
+/// to check `run_rfe` below the full count — the path `rfecv` drives its final
+/// elimination through, and the one that actually ships the selection.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RfeTightCase {
     pub importances: Vec<f64>,
@@ -363,6 +366,16 @@ pub struct RfeTightExpected {
     pub grid_scores: Vec<f64>,
     /// `RFECV.n_features_` (chosen count).
     pub n_optimal: usize,
+    /// Optional second elimination target `> 1` for a `RFE(n_features_to_select=
+    /// rfe_target)` run — exercises `run_rfe` below the full count. Present only in
+    /// fixtures that opt in; when set, `rfe_ranking_at_target`/`rfe_support_at_target`
+    /// carry that run's `ranking_`/`support_`.
+    #[serde(default)]
+    pub rfe_target: Option<usize>,
+    #[serde(default)]
+    pub rfe_ranking_at_target: Option<Vec<usize>>,
+    #[serde(default)]
+    pub rfe_support_at_target: Option<Vec<bool>>,
 }
 
 /// AGGREGATE-tier: end-to-end RFECV selected-feature overlap vs q2. `reference_sets`

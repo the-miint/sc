@@ -152,7 +152,15 @@ pub fn rfecv(
 
             if gi + 1 < grid.len() {
                 let importances = forest.feature_importances();
+                // Read the removal from the precomputed grid, but keep it tied to
+                // the one shared definition so the loop can't silently diverge
+                // from grid_counts / run_rfe (all three must agree — TIGHT tier).
                 let remove = count - grid[gi + 1];
+                debug_assert_eq!(
+                    remove,
+                    bookkeeping::clamped_step(step, count, params.min_features_to_select),
+                    "rfecv grid step diverged from bookkeeping::clamped_step"
+                );
                 let drop_local = bookkeeping::lowest_indices(&importances, remove);
                 let mut keep = vec![true; surviving.len()];
                 for &local in &drop_local {

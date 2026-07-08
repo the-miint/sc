@@ -95,14 +95,22 @@ pub fn linear_regress(actual: &[f64], pred: &[f64]) -> RegressionReport {
 /// convention (`force_finite=True`): when `Σ(y−ȳ)² == 0`, returns `1.0` if the
 /// prediction is exact and `0.0` otherwise.
 ///
-/// Panics if the slices differ in length or are empty.
+/// Fewer than two samples is undefined: sklearn warns and returns NaN, so we
+/// return [`f64::NAN`] to match. This guard matters because a single sample always
+/// has `Σ(y−ȳ)² == 0`, so without it the constant-target branch would wrongly
+/// report a finite `1.0`/`0.0` — a silent parity gap for near-LOO CV folds.
+///
+/// Panics if the slices differ in length.
 pub fn r2_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     assert_eq!(
         y_true.len(),
         y_pred.len(),
         "r2_score: y_true/y_pred length mismatch"
     );
-    assert!(!y_true.is_empty(), "r2_score: empty input");
+    if y_true.len() < 2 {
+        // sklearn: "R^2 score is not well-defined with less than two samples."
+        return f64::NAN;
+    }
     let n = y_true.len() as f64;
     let mean = y_true.iter().sum::<f64>() / n;
     let mut ss_res = 0.0;
@@ -154,5 +162,15 @@ mod tests {
         // Constant target, imperfect prediction → 0.0; perfect → 1.0.
         assert_eq!(r2_score(&[5.0, 5.0, 5.0], &[5.0, 5.0, 6.0]), 0.0);
         assert_eq!(r2_score(&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0]), 1.0);
+    }
+
+    #[test]
+    fn r2_undefined_below_two_samples() {
+        // sklearn returns NaN (never a finite 1.0/0.0) for < 2 samples, regardless
+        // of prediction quality: a single point has zero target variance, so the
+        // constant-target branch must not fire. Reachable via near-LOO CV folds.
+        assert!(r2_score(&[7.5], &[7.5]).is_nan());
+        assert!(r2_score(&[7.5], &[3.0]).is_nan());
+        assert!(r2_score(&[], &[]).is_nan());
     }
 }
