@@ -4,9 +4,10 @@
 use std::collections::HashSet;
 
 use sc_core::{
-    grow, indexed_map, k_fold, rfecv, stratified_k_fold, train_test_split, tree_seed, tune,
-    Criterion, DetRng, Error, FeatureMatrix, MaxFeatures, ParamAxis, RandomForest,
-    RandomForestParams, RfeStep, RfecvParams, Targets, TestSize, TreeParams, TuningParams,
+    grow, indexed_map, k_fold, ncv, rfecv, stratified_k_fold, train_test_split, tree_seed, tune,
+    Criterion, DetRng, Error, FeatureMatrix, MaxFeatures, NcvParams, OofPredictions, ParamAxis,
+    RandomForest, RandomForestParams, RfeStep, RfecvParams, Targets, TestSize, TreeParams,
+    TuningParams,
 };
 // Only the `parallel`-gated invariance test names `Tree` (via `sequential_forest`).
 #[cfg(feature = "parallel")]
@@ -441,4 +442,111 @@ fn tuning_golden() {
     assert_eq!(r.best_params.tree.max_depth, None);
     assert_eq!(r.best_params.tree.max_features, MaxFeatures::All);
     assert_eq!(r.best_params.tree.criterion, Criterion::Gini);
+}
+
+/// Freezes the whole classification OOF-CV pipeline end to end (seeded stratified
+/// folds → per-fold forest fits at `tree_seed(seed, 1+f)` → held-out predict →
+/// OOF scatter into original positions → soft-vote proba → fold-averaged MDI →
+/// per-fold accuracy + population mean/std). A diff means the fold seeding, the
+/// fit, the scatter, or the aggregation drifted and would silently change every
+/// OOF run from a given seed. Values are for the fixed 12-sample, 4-feature,
+/// 3-class input above with `n_splits=3`, `n_estimators=8`, `max_features=sqrt`.
+/// The cyclic a/b/c target is independent of the features, so every held-out fold
+/// scores 0 accuracy — the discriminating frozen values are the OOF codes/proba
+/// (which pin the scatter) and the importances; the MSE/mean/std score path is
+/// pinned by `ncv_regression_golden` below.
+#[test]
+fn ncv_classification_golden() {
+    let (x, y) = forest_golden_data();
+    let mut p = NcvParams::classifier_defaults();
+    p.forest.n_estimators = 8;
+    p.forest.tree.max_features = MaxFeatures::Sqrt;
+    p.n_splits = 3;
+    let r = ncv(&x, &y, &p, 20260707).unwrap();
+
+    let OofPredictions::Classification { codes, proba, .. } = &r.predictions else {
+        panic!("expected classification predictions");
+    };
+    assert_eq!(codes, &[1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 2, 0]);
+    // Two full OOF proba rows (each the fold-forest's soft vote for that sample).
+    let expected_proba0 = [0.125, 0.5, 0.375];
+    let expected_proba1 = [0.75, 0.25, 0.0];
+    for (g, e) in proba[0].iter().zip(&expected_proba0) {
+        assert!((g - e).abs() < 1e-12, "proba[0] {g} != {e}");
+    }
+    for (g, e) in proba[1].iter().zip(&expected_proba1) {
+        assert!((g - e).abs() < 1e-12, "proba[1] {g} != {e}");
+    }
+    assert_eq!(r.fold_scores, [0.0, 0.0, 0.0]);
+    assert_eq!(r.mean_score, 0.0);
+    assert_eq!(r.std_score, 0.0);
+
+    let expected_mdi = [
+        0.34110616235616237,
+        0.21520438473563472,
+        0.2819593427405928,
+        0.16173011016761016,
+    ];
+    for (i, (g, e)) in r.importances.iter().zip(&expected_mdi).enumerate() {
+        assert!((g - e).abs() < 1e-12, "importances[{i}] = {g} != {e}");
+    }
+}
+
+/// Freezes the **regression** OOF-CV pipeline, and in particular the new
+/// per-fold `mean_squared_error` fold-score path with its population (ddof=0)
+/// mean/std — the piece the classification golden's all-zero-accuracy data can't
+/// exercise. Same fixed 12×4 design as above but with a numeric target, `KFold`
+/// splits (regression), `n_splits=3`, `n_estimators=8`.
+#[test]
+fn ncv_regression_golden() {
+    let x = dense(&[
+        &[0.0, 1.0, 0.0, 2.0],
+        &[1.0, 0.0, 3.0, 0.0],
+        &[2.0, 2.0, 0.0, 1.0],
+        &[0.0, 3.0, 1.0, 0.0],
+        &[3.0, 0.0, 2.0, 2.0],
+        &[1.0, 1.0, 0.0, 3.0],
+        &[2.0, 0.0, 3.0, 0.0],
+        &[0.0, 2.0, 1.0, 1.0],
+        &[3.0, 3.0, 0.0, 0.0],
+        &[1.0, 0.0, 2.0, 2.0],
+        &[2.0, 1.0, 0.0, 3.0],
+        &[0.0, 0.0, 3.0, 1.0],
+    ]);
+    let y = Targets::numeric(&[
+        1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
+    ])
+    .unwrap();
+    let mut p = NcvParams::regressor_defaults();
+    p.forest.n_estimators = 8;
+    p.n_splits = 3;
+    let r = ncv(&x, &y, &p, 20260707).unwrap();
+
+    let OofPredictions::Regression { values } = &r.predictions else {
+        panic!("expected regression predictions");
+    };
+    let expected_values = [
+        10.125, 6.0, 8.875, 7.75, 4.625, 2.5, 4.875, 6.625, 5.375, 2.5, 8.25, 4.0,
+    ];
+    for (i, (g, e)) in values.iter().zip(&expected_values).enumerate() {
+        assert!((g - e).abs() < 1e-12, "values[{i}] = {g} != {e}");
+    }
+
+    // Per-fold MSE, then population mean/std over the folds.
+    let expected_scores = [23.36328125, 8.2109375, 37.69921875];
+    for (i, (g, e)) in r.fold_scores.iter().zip(&expected_scores).enumerate() {
+        assert!((g - e).abs() < 1e-12, "fold_scores[{i}] = {g} != {e}");
+    }
+    assert!((r.mean_score - 23.091145833333332).abs() < 1e-12);
+    assert!((r.std_score - 12.040078239876701).abs() < 1e-12);
+
+    let expected_mdi = [
+        0.29150836535771124,
+        0.1416519659938166,
+        0.263166597555021,
+        0.3036730710934512,
+    ];
+    for (i, (g, e)) in r.importances.iter().zip(&expected_mdi).enumerate() {
+        assert!((g - e).abs() < 1e-12, "importances[{i}] = {g} != {e}");
+    }
 }

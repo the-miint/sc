@@ -131,6 +131,30 @@ pub fn r2_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     }
 }
 
+/// Mean squared error `1/N Σ(y_true − y_pred)²` (`sklearn.metrics.mean_squared_error`).
+///
+/// This is the per-fold **regression** score q2's `regress_samples_ncv` reports
+/// (`scoring=mean_squared_error`), deliberately unlike RFECV/tuning — which score
+/// with sklearn's default `.score()` (R², see [`r2_score`]). Defined for any
+/// non-empty input, so it can score the small held-out folds an OOF
+/// cross-validation produces — unlike [`linear_regress`], which needs ≥3 points.
+///
+/// Panics if the slices differ in length or are empty.
+pub fn mean_squared_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    assert_eq!(
+        y_true.len(),
+        y_pred.len(),
+        "mean_squared_error: y_true/y_pred length mismatch"
+    );
+    assert!(!y_true.is_empty(), "mean_squared_error: needs >= 1 point");
+    let sse: f64 = y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(&t, &p)| (t - p) * (t - p))
+        .sum();
+    sse / y_true.len() as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +186,32 @@ mod tests {
         // Constant target, imperfect prediction → 0.0; perfect → 1.0.
         assert_eq!(r2_score(&[5.0, 5.0, 5.0], &[5.0, 5.0, 6.0]), 0.0);
         assert_eq!(r2_score(&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0]), 1.0);
+    }
+
+    #[test]
+    fn mse_matches_hand_values() {
+        // Perfect prediction → 0.
+        assert_eq!(mean_squared_error(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]), 0.0);
+        // Errors -1, +2, -1 → (1 + 4 + 1)/3 = 2.
+        assert!((mean_squared_error(&[1.0, 2.0, 3.0], &[2.0, 0.0, 4.0]) - 2.0).abs() < 1e-12);
+        // Single point (the near-LOO fold case linear_regress can't score): (5-3)² = 4.
+        assert_eq!(mean_squared_error(&[5.0], &[3.0]), 4.0);
+        // Order-invariant (q2 calls scoring(pred, truth), MSE is symmetric).
+        let a = [1.0, -2.0, 3.5];
+        let b = [0.5, 0.0, 4.0];
+        assert_eq!(mean_squared_error(&a, &b), mean_squared_error(&b, &a));
+    }
+
+    #[test]
+    #[should_panic(expected = "length mismatch")]
+    fn mse_panics_on_length_mismatch() {
+        mean_squared_error(&[1.0, 2.0], &[1.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = ">= 1 point")]
+    fn mse_panics_on_empty() {
+        mean_squared_error(&[], &[]);
     }
 
     #[test]

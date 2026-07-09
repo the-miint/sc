@@ -73,6 +73,7 @@ pub enum Payload {
     ForestAggregate(ForestAggregateCase),
     RfeTight(RfeTightCase),
     RfecvAggregate(RfecvAggregateCase),
+    NcvAggregate(NcvAggregateCase),
 }
 
 /// Accuracy / confusion / baseline, and — when `proba` is present — multiclass
@@ -402,6 +403,40 @@ pub struct RfecvAggregateCase {
     pub n_optimal_min: usize,
     pub n_optimal_max: usize,
     pub n_optimal_margin: usize,
+}
+
+/// An AGGREGATE-tier nested/OOF-CV case (M8), mirroring [`ForestAggregateCase`]
+/// but with **injected folds** instead of a single split: `fold_ids[i]` is the
+/// test fold sample `i` belongs to (rebuilt into `CvFolds` via
+/// `CvFolds::from_fold_ids(&fold_ids, n_splits)`). Over K forest seeds (folds
+/// fixed), the generator ran the OOF loop and scored the **overall** concatenated
+/// prediction — `accuracy_score(y, oof)` (classification) or squared-Pearson r² +
+/// MSE via the `linear_regress` formula (regression), matching M4's
+/// `ForestAggregate`, not sklearn's `r2_score`. `band` is the accuracy (cls) or
+/// r² (reg) band; `mse_band` accompanies regression. `ref_importances` is the
+/// seed-mean of the fold-averaged importances; the run's importances must be
+/// Spearman-correlated with it at least `rank_corr_floor - rank_corr_margin`.
+///
+/// Targets arrive as raw per-sample `labels` (classification) or `values`
+/// (regression) in dataset order, rebuilt Rust-side through the same sorted-unique
+/// encoding sklearn used.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NcvAggregateCase {
+    pub task: String,
+    pub data_coo: CooTable,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub values: Option<Vec<f64>>,
+    pub fold_ids: Vec<usize>,
+    pub n_splits: usize,
+    pub n_estimators: usize,
+    pub band: AggregateBand,
+    #[serde(default)]
+    pub mse_band: Option<AggregateBand>,
+    pub ref_importances: Vec<f64>,
+    pub rank_corr_floor: f64,
+    pub rank_corr_margin: f64,
 }
 
 /// Load every `*.json` fixture in `dir`, sorted by path for stable test order.
