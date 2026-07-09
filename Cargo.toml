@@ -1,12 +1,24 @@
 [workspace]
 resolver = "2"
-members = ["crates/sc-core", "crates/sc-oracle"]
+members = ["crates/sc-core", "crates/sc-oracle", "crates/sc-arrow", "crates/sc-capi"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "BSD-3-Clause"
 authors = ["Daniel McDonald <d3mcdonald@health.ucsd.edu>"]
+
+# Arrow C Data Interface, pinned once here so sc-arrow and sc-capi never drift
+# apart (an ABI mismatch between the two would be a memory-safety bug, not a
+# compile error). Split crates (no arrow / arrow-ipc) keep the native lib lean;
+# `default-features = false` drops the heavy compute/IPC stack we never use.
+[workspace.dependencies]
+# `ffi` on arrow-array cascades to arrow-schema/ffi + arrow-data/ffi (the C Data
+# Interface `to_ffi`/`from_ffi` + `FFI_ArrowArray`/`FFI_ArrowSchema`).
+arrow-array = { version = "59", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "59", default-features = false, features = ["ffi"] }
+arrow-data = { version = "59", default-features = false, features = ["ffi"] }
+arrow-buffer = { version = "59", default-features = false }
 
 [workspace.lints.clippy]
 all = "warn"

@@ -9,6 +9,15 @@ allow = [
     "Unicode-3.0",
     "ISC",
     "Zlib",
+    # CC0-1.0 (public-domain dedication, more permissive than MIT, no copyleft):
+    # tiny-keccak, pulled by ahash's compile-time-rng under arrow-array. Only in
+    # the native sc-arrow/sc-capi tree — never the wasm-clean sc-core build.
+    "CC0-1.0",
+    # cbindgen (MPL-2.0) is a build-time-only codegen tool for sc-capi — never
+    # linked into or shipped with any artifact. MPL-2.0's file-level copyleft
+    # covers cbindgen's own sources, not the generated header (a build product)
+    # nor our BSD-3-Clause libraries, so it is safe to allow here.
+    "MPL-2.0",
 ]
 
 [bans]

@@ -1,0 +1,39 @@
+# Valgrind leak suppressions for the sc C harness.
+#
+# rayon's *global* thread pool is initialized lazily on first parallel use and
+# intentionally lives for the whole process — its worker threads and their
+# crossbeam-deque buffers are never torn down, so they show up as "still
+# reachable". crossbeam-deque also stores tagged pointers valgrind can't
+# recognize, which it reports as "possibly lost". Neither is a leak in sc's FFI
+# code (which reports "definitely lost: 0"); these suppress only the thread-pool
+# internals so the gate still catches real leaks in our release-callback /
+# handle / buffer paths.
+
+{
+   rayon-crossbeam-deque-buffers
+   Memcheck:Leak
+   match-leak-kinds: possible,reachable
+   fun:malloc
+   ...
+   fun:*crossbeam_deque*
+   ...
+}
+
+{
+   rayon-core-registry
+   Memcheck:Leak
+   match-leak-kinds: possible,reachable
+   fun:malloc
+   ...
+   fun:*rayon_core*
+   ...
+}
+
+{
+   rayon-worker-thread-stacks
+   Memcheck:Leak
+   match-leak-kinds: possible,reachable
+   ...
+   fun:*rayon_core*registry*spawn*
+   ...
+}

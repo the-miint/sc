@@ -1,0 +1,20 @@
+[package]
+name = "sc-arrow"
+description = "Arrow C Data Interface marshaling between sc-core and native callers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# sc-core is the pure engine; sc-arrow adds the (unsafe) Arrow boundary. We need
+# `persist` (ModelBundle round-trips through the C-API) and `parallel` (the
+# native lib fits with rayon); feature unification with sc-capi keeps these on.
+sc-core = { path = "../sc-core", features = ["persist", "parallel"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-data = { workspace = true }
+arrow-buffer = { workspace = true }
+
+[lints]
+workspace = true

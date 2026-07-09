@@ -20,8 +20,25 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: test (parallel)
         run: cargo test --all-features
+      # Scoped to sc-core/sc-oracle: a workspace-wide --no-default-features would
+      # let sc-arrow/sc-capi re-enable persist+parallel on sc-core via feature
+      # unification, so this gate would stop testing the minimal serde/rayon-free
+      # core.
       - name: test (sequential)
-        run: cargo test --no-default-features
+        run: cargo test -p sc-core -p sc-oracle --no-default-features
+
+  capi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      # `make capi` builds the staticlib + regenerates include/sc.h; `ctest`
+      # compiles and runs the C harness; `leaks` runs it under valgrind.
+      - name: C-API harness + leak check
+        run: make capi ctest leaks
 
   wasm:
     runs-on: ubuntu-latest
