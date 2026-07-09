@@ -37,7 +37,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
-use sc_core::{ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, Task};
+use sc_core::{
+    ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, ShapValues, Task,
+};
 
 // ---------------------------------------------------------------------------
 // Status codes
@@ -194,6 +196,30 @@ pub struct sc_cv_result_t {
     pub fold_scores_schema: FFI_ArrowSchema,
     pub mean_score: f64,
     pub std_score: f64,
+}
+
+/// Output of [`sc_shap`]: per-prediction path-dependent TreeSHAP attributions.
+/// All Arrow arrays carry release callbacks the caller must invoke. For a
+/// regressor, `classes` is the released/empty sentinel (its `release` is NULL).
+#[repr(C)]
+pub struct sc_shap_result_t {
+    /// `FixedSizeList<Float64>[n_outputs * n_features]`, one list per sample. Each
+    /// row is output-major then feature (`[o0f0, o0f1, …, o1f0, …]`).
+    pub shap_values: FFI_ArrowArray,
+    pub shap_values_schema: FFI_ArrowSchema,
+    /// `Float64[n_outputs]` expected values E[f] (one per class / one for a
+    /// regressor).
+    pub base_values: FFI_ArrowArray,
+    pub base_values_schema: FFI_ArrowSchema,
+    /// `Utf8[n_classes]` class labels aligned to the output axis (classifier);
+    /// released/empty for a regressor.
+    pub classes: FFI_ArrowArray,
+    pub classes_schema: FFI_ArrowSchema,
+    /// Number of explained outputs: `n_classes`, or `1` for a regressor.
+    pub n_outputs: i64,
+    /// Number of features the attribution spans (the model's feature space —
+    /// RFE-selected columns for an RFE model).
+    pub n_features: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +652,7 @@ pub unsafe extern "C" fn sc_predict_proba(
         let x = import_matrix(table)?;
         let xf = features_for(&model.bundle, &x)?;
         let proba = forest.predict_proba(&xf)?;
-        sc_arrow::export_proba(&proba, n_classes, out_proba, out_proba_schema)?;
+        sc_arrow::export_fixed_size_list(&proba, n_classes, out_proba, out_proba_schema)?;
         let classes: Vec<String> = forest.classes().expect("classifier has classes").to_vec();
         sc_arrow::export_utf8(&classes, out_classes, out_classes_schema)?;
         Ok(())
@@ -728,7 +754,7 @@ unsafe fn write_cv_result(
                 addr_of_mut!((*out).predictions),
                 addr_of_mut!((*out).predictions_schema),
             )?;
-            sc_arrow::export_proba(
+            sc_arrow::export_fixed_size_list(
                 proba,
                 classes.len(),
                 addr_of_mut!((*out).proba),
@@ -785,6 +811,99 @@ pub unsafe extern "C" fn sc_feature_importances(
         sc_arrow::export_f64(&fi, out, out_schema)?;
         Ok(())
     })
+}
+
+// ---------------------------------------------------------------------------
+// TreeSHAP
+// ---------------------------------------------------------------------------
+
+#[no_mangle]
+pub unsafe extern "C" fn sc_shap(
+    ctx: *mut sc_context_t,
+    model: *const sc_model_t,
+    table: *const sc_coo_table_t,
+    out: *mut sc_shap_result_t,
+) -> sc_status_t {
+    guard(ctx, || {
+        let ctx = req_ref(ctx, "ctx")?;
+        let model = req_ref(model, "model")?;
+        let table = req_ref(table, "table")?;
+        if out.is_null() {
+            return Err(ApiError::null("out"));
+        }
+        // Put every field in a fully releasable (empty) state before any import /
+        // compute / export, so any early return leaves the whole struct
+        // well-defined and safe to release — never a live array beside
+        // uninitialized memory (the M9 partial-failure lesson).
+        init_empty_shap_result(out);
+        let x = import_matrix(table)?;
+        let xf = features_for(&model.bundle, &x)?;
+        let forest = &model.bundle.forest;
+        let shap = run_in_pool(ctx, || forest.tree_shap(&xf))?;
+        write_shap_result(&shap, forest, out)?;
+        Ok(())
+    })
+}
+
+/// Fill every field of an (uninitialized) `sc_shap_result_t` with empty/released
+/// sentinels + zero scalars.
+unsafe fn init_empty_shap_result(out: *mut sc_shap_result_t) {
+    use std::ptr::addr_of_mut;
+    sc_arrow::write_empty(
+        addr_of_mut!((*out).shap_values),
+        addr_of_mut!((*out).shap_values_schema),
+    );
+    sc_arrow::write_empty(
+        addr_of_mut!((*out).base_values),
+        addr_of_mut!((*out).base_values_schema),
+    );
+    sc_arrow::write_empty(
+        addr_of_mut!((*out).classes),
+        addr_of_mut!((*out).classes_schema),
+    );
+    addr_of_mut!((*out).n_outputs).write(0);
+    addr_of_mut!((*out).n_features).write(0);
+}
+
+unsafe fn write_shap_result(
+    shap: &ShapValues,
+    forest: &RandomForest,
+    out: *mut sc_shap_result_t,
+) -> Result<(), sc_arrow::MarshalError> {
+    use std::ptr::addr_of_mut;
+    let width = shap.n_outputs * shap.n_features;
+    // Flatten each sample's [output][feature] into one output-major row.
+    let rows: Vec<Vec<f64>> = shap
+        .values
+        .iter()
+        .map(|per_output| per_output.iter().flatten().copied().collect())
+        .collect();
+    sc_arrow::export_fixed_size_list(
+        &rows,
+        width,
+        addr_of_mut!((*out).shap_values),
+        addr_of_mut!((*out).shap_values_schema),
+    )?;
+    sc_arrow::export_f64(
+        &shap.base_values,
+        addr_of_mut!((*out).base_values),
+        addr_of_mut!((*out).base_values_schema),
+    )?;
+    // Classification carries class labels; regression leaves the slot empty.
+    match forest.classes() {
+        Some(classes) => sc_arrow::export_utf8(
+            classes,
+            addr_of_mut!((*out).classes),
+            addr_of_mut!((*out).classes_schema),
+        )?,
+        None => sc_arrow::write_empty(
+            addr_of_mut!((*out).classes),
+            addr_of_mut!((*out).classes_schema),
+        ),
+    }
+    addr_of_mut!((*out).n_outputs).write(shap.n_outputs as i64);
+    addr_of_mut!((*out).n_features).write(shap.n_features as i64);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

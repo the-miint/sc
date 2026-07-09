@@ -240,6 +240,145 @@ fn predict_proba_width_and_sum() {
 }
 
 #[test]
+#[allow(clippy::needless_range_loop)] // index-driven cross-checks over parallel arrays
+fn marshaled_shap_matches_direct() {
+    use arrow_array::FixedSizeListArray;
+    let (ns, nf, r, c, v, labels) = separable();
+    let seed = 42u64;
+
+    // Direct sc-core path: fit + tree_shap.
+    let x = FeatureMatrix::from_coo(ns as usize, nf as usize, &r, &c, &v).unwrap();
+    let y = Targets::categorical(&labels).unwrap();
+    let mut p = RandomForestParams::classifier_defaults();
+    p.n_estimators = 8;
+    p.tree.max_features = MaxFeatures::Sqrt;
+    let direct = RandomForest::fit(&x, &y, &p, seed).unwrap();
+    let ds = direct.tree_shap(&x).unwrap();
+    let proba = direct.predict_proba(&x).unwrap();
+    let (no, nfeat) = (ds.n_outputs, ds.n_features);
+    let width = no * nfeat;
+
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r.clone(), c.clone(), v.clone());
+        let (t, ts) = ffi_utf8(&labels);
+        let params = base_params(seed);
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+
+        let stable = make_table(ns, nf, r, c, v);
+        let mut result = MaybeUninit::<sc_shap_result_t>::uninit();
+        assert_eq!(sc_shap(ctx, model, &stable, result.as_mut_ptr()), SC_OK);
+        let result = result.assume_init();
+        assert_eq!(result.n_outputs, no as i64);
+        assert_eq!(result.n_features, nfeat as i64);
+
+        // shap_values: FixedSizeList<f64>[width], one row per sample.
+        let list = FixedSizeListArray::from(
+            from_ffi(result.shap_values, &result.shap_values_schema).unwrap(),
+        );
+        assert_eq!(list.len(), ns as usize);
+        assert_eq!(list.value_length(), width as i32);
+        let flat = list
+            .values()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        // Each row equals the direct tree_shap, flattened output-major.
+        for s in 0..ns as usize {
+            for o in 0..no {
+                for f in 0..nfeat {
+                    let got = flat.value(s * width + o * nfeat + f);
+                    assert!(
+                        (got - ds.values[s][o][f]).abs() < 1e-12,
+                        "shap[{s}][{o}][{f}]: marshaled {got} vs direct {}",
+                        ds.values[s][o][f]
+                    );
+                }
+            }
+        }
+
+        // base_values Float64[n_outputs] equal to the direct base.
+        let base =
+            Float64Array::from(from_ffi(result.base_values, &result.base_values_schema).unwrap());
+        assert_eq!(base.len(), no);
+        for o in 0..no {
+            assert!((base.value(o) - ds.base_values[o]).abs() < 1e-12);
+            // Additivity: base + Σ_f shap == predict_proba, per sample/class.
+            for s in 0..ns as usize {
+                let row_sum: f64 = (0..nfeat)
+                    .map(|f| flat.value(s * width + o * nfeat + f))
+                    .sum();
+                assert!(
+                    (base.value(o) + row_sum - proba[s][o]).abs() < 1e-9,
+                    "additivity[{s}][{o}]"
+                );
+            }
+        }
+
+        // Classifier carries class labels aligned to the output axis.
+        assert_eq!(
+            read_utf8(result.classes, result.classes_schema),
+            vec!["a".to_string(), "b".into()]
+        );
+
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
+#[test]
+fn shap_regressor_leaves_classes_empty() {
+    let (ns, nf, r, c, v) = dense_coo(&[
+        &[0.0, 1.0],
+        &[1.0, 0.0],
+        &[2.0, 1.0],
+        &[3.0, 0.0],
+        &[4.0, 1.0],
+        &[5.0, 0.0],
+    ]);
+    let targets = vec![1.0, 1.5, 2.0, 8.0, 8.5, 9.0];
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r.clone(), c.clone(), v.clone());
+        let (t, ts) = ffi_f64(targets);
+        let mut params = base_params(0);
+        params.criterion = sc_criterion_t::SC_CRITERION_SQUARED_ERROR;
+        params.max_features.kind = sc_max_features_kind_t::SC_MAX_FEATURES_ALL;
+        params.n_estimators = 10;
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_regressor(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+
+        let stable = make_table(ns, nf, r, c, v);
+        let mut result = MaybeUninit::<sc_shap_result_t>::uninit();
+        assert_eq!(sc_shap(ctx, model, &stable, result.as_mut_ptr()), SC_OK);
+        let result = result.assume_init();
+        assert_eq!(result.n_outputs, 1);
+        assert_eq!(result.n_features, nf);
+        assert!(
+            result.classes.is_released(),
+            "regressor shap must leave classes empty"
+        );
+        let base =
+            Float64Array::from(from_ffi(result.base_values, &result.base_values_schema).unwrap());
+        assert_eq!(base.len(), 1);
+        assert!(base.value(0).is_finite());
+        // `base` (from_ffi) releases base_values on drop; every other field of
+        // `result` is released by drop glue at scope end (partial move, no Drop
+        // impl on the struct).
+
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
+#[test]
 fn serialize_deserialize_predict_round_trip() {
     let (ns, nf, r, c, v, labels) = separable();
     unsafe {

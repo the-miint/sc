@@ -187,6 +187,17 @@ impl Tree {
                         "from_sklearn: node {i} feature {f} out of range [0, {n_features})"
                     )));
                 }
+                // TreeSHAP divides each internal node's cover into its children's
+                // hot/cold fractions, so an internal node's cover must be strictly
+                // positive (a genuine split always has samples). Only the root was
+                // guaranteed `> 0` above; require it for every internal node so a
+                // malformed import can't silently produce NaN/Inf attributions.
+                if weighted_n_node_samples[i] <= 0.0 {
+                    return Err(Error::InvalidInput(format!(
+                        "from_sklearn: internal node {i} weighted_n_node_samples {} must be > 0",
+                        weighted_n_node_samples[i]
+                    )));
+                }
             }
             if n_node_samples[i] < 0 {
                 return Err(Error::InvalidInput(format!(
@@ -359,16 +370,23 @@ impl Tree {
         &self.weighted_n_node_samples
     }
 
+    /// Whether a sample routes LEFT at internal `node`, given that feature's
+    /// value `x_val`: `(x_val as f32 as f64) <= threshold`. The `as f32` cast
+    /// reproduces sklearn's float32 view of `X` and is load-bearing for import
+    /// exactness. `pub(crate)` so the in-crate `shap` module reuses the exact
+    /// hot-child rule instead of duplicating the cast. Panics if `node` is OOB.
+    pub(crate) fn goes_left(&self, node: usize, x_val: f64) -> bool {
+        (x_val as f32 as f64) <= self.threshold[node]
+    }
+
     /// Route one already-densified feature row to its leaf node id. The shared
-    /// traversal: left when `(x as f32 as f64) <= threshold`. `row` must have
+    /// traversal: left when [`goes_left`](Self::goes_left) holds. `row` must have
     /// length `n_features`.
     fn descend(&self, row: &[f64]) -> usize {
         let mut node = 0usize;
         while self.children_left[node] != -1 {
             let f = self.feature[node] as usize;
-            // Cast to f32 exactly as sklearn's splitter sees the data.
-            let x = row[f] as f32 as f64;
-            node = if x <= self.threshold[node] {
+            node = if self.goes_left(node, row[f]) {
                 self.children_left[node] as usize
             } else {
                 self.children_right[node] as usize
@@ -706,6 +724,25 @@ mod tests {
             1,
         )
         .is_err());
+        // A non-root *internal* node (node 1) with zero cover is rejected: it
+        // would make TreeSHAP divide by zero. Root (node 0) cover is positive, so
+        // this exercises the per-internal-node check, not the root check.
+        assert!(
+            Tree::from_sklearn(
+                cls,
+                &[1, 2, -1, -1, -1],
+                &[4, 3, -1, -1, -1],
+                &[0, 0, -2, -2, -2],
+                &[0.5, 0.5, -2.0, -2.0, -2.0],
+                &[0.5, 0.5, 0.5, 0.5, 1.0, 0.0, 0.0, 1.0, 0.5, 0.5],
+                &[0.0, 0.0, 0.0, 0.0, 0.0],
+                &[4, 0, 0, 0, 4],
+                &[4.0, 0.0, 0.0, 0.0, 4.0],
+                1,
+            )
+            .is_err(),
+            "zero-cover internal node"
+        );
     }
 
     #[test]

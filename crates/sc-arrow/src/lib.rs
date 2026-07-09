@@ -364,26 +364,28 @@ pub unsafe fn export_utf8(
     write_ffi(arr.into_data(), out_a, out_s)
 }
 
-/// Export soft-vote probabilities as `FixedSizeList<Float64>[n_classes]`, one
-/// list per sample (row-major flatten). `n_classes` must be `>= 1` and every row
-/// must have exactly that width.
+/// Export equal-width `Float64` rows as `FixedSizeList<Float64>[width]`, one list
+/// per row (row-major flatten). Used for soft-vote probabilities
+/// (`width == n_classes`) and per-sample TreeSHAP rows
+/// (`width == n_outputs * n_features`). `width` must be `>= 1` and every row must
+/// have exactly that width.
 ///
 /// # Safety
 /// See [`write_ffi`].
-pub unsafe fn export_proba(
-    proba: &[Vec<f64>],
-    n_classes: usize,
+pub unsafe fn export_fixed_size_list(
+    rows: &[Vec<f64>],
+    width: usize,
     out_a: *mut FFI_ArrowArray,
     out_s: *mut FFI_ArrowSchema,
 ) -> Result<(), MarshalError> {
-    if n_classes == 0 {
-        return Err(MarshalError::arrow("proba: n_classes must be >= 1"));
+    if width == 0 {
+        return Err(MarshalError::arrow("fixed_size_list: width must be >= 1"));
     }
-    let mut flat = Vec::with_capacity(proba.len() * n_classes);
-    for (i, row) in proba.iter().enumerate() {
-        if row.len() != n_classes {
+    let mut flat = Vec::with_capacity(rows.len() * width);
+    for (i, row) in rows.iter().enumerate() {
+        if row.len() != width {
             return Err(MarshalError::arrow(format!(
-                "proba: row {i} width {} != n_classes {n_classes}",
+                "fixed_size_list: row {i} width {} != {width}",
                 row.len()
             )));
         }
@@ -391,7 +393,7 @@ pub unsafe fn export_proba(
     }
     let values = Arc::new(Float64Array::from(flat));
     let field = Arc::new(Field::new("item", DataType::Float64, false));
-    let list = FixedSizeListArray::try_new(field, n_classes as i32, values, None)
+    let list = FixedSizeListArray::try_new(field, width as i32, values, None)
         .map_err(|e| MarshalError::arrow(e.to_string()))?;
     write_ffi(list.into_data(), out_a, out_s)
 }
@@ -532,12 +534,12 @@ mod tests {
     }
 
     #[test]
-    fn exports_proba_fixed_size_list() {
+    fn exports_fixed_size_list() {
         let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
         let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
-        let proba = vec![vec![0.75, 0.25], vec![0.1, 0.9]];
+        let rows = vec![vec![0.75, 0.25], vec![0.1, 0.9]];
         unsafe {
-            export_proba(&proba, 2, a.as_mut_ptr(), s.as_mut_ptr()).unwrap();
+            export_fixed_size_list(&rows, 2, a.as_mut_ptr(), s.as_mut_ptr()).unwrap();
             let data = from_ffi(a.assume_init(), &s.assume_init()).unwrap();
             let list = FixedSizeListArray::from(data);
             assert_eq!(list.len(), 2);
@@ -553,7 +555,8 @@ mod tests {
         let bad = vec![vec![0.5, 0.5], vec![1.0]];
         let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
         let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
-        let err = unsafe { export_proba(&bad, 2, a.as_mut_ptr(), s.as_mut_ptr()).unwrap_err() };
+        let err =
+            unsafe { export_fixed_size_list(&bad, 2, a.as_mut_ptr(), s.as_mut_ptr()).unwrap_err() };
         assert!(matches!(err, MarshalError::Arrow(_)));
     }
 

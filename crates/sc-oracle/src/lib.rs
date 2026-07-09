@@ -47,6 +47,9 @@ pub struct Generator {
     pub numpy: String,
     pub qiime2_amplicon: String,
     pub seed: u64,
+    /// Python `shap` library version — present only on the M10 TreeSHAP fixtures.
+    #[serde(default)]
+    pub shap: Option<String>,
 }
 
 /// One fixture file = one case: common metadata plus a kind-tagged [`Payload`].
@@ -70,6 +73,8 @@ pub enum Payload {
     TreeRegressor(TreeRegressorCase),
     ForestClassifier(ForestClassifierCase),
     ForestRegressor(ForestRegressorCase),
+    ForestShapClassifier(ForestShapClassifierCase),
+    ForestShapRegressor(ForestShapRegressorCase),
     ForestAggregate(ForestAggregateCase),
     RfeTight(RfeTightCase),
     RfecvAggregate(RfecvAggregateCase),
@@ -273,6 +278,47 @@ pub struct ForestRegressorCase {
 pub struct ForestRegressorExpected {
     pub predict: Vec<f64>,
     pub mdi: Vec<f64>,
+}
+
+/// A fitted `RandomForestClassifier` explained by the Python `shap` library's
+/// path-dependent `TreeExplainer` — the TIGHT arbiter for M10 TreeSHAP. Carries
+/// every tree's exported internals (reused via [`Tree::from_sklearn`]), the class
+/// labels, a query table, and shap's golden `base_values` + `shap_values`
+/// normalized to `[sample][class][feature]`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestShapClassifierCase {
+    pub trees: Vec<ClsTree>,
+    pub n_classes: usize,
+    pub classes: Vec<String>,
+    pub n_features: usize,
+    pub test_coo: CooTable,
+    pub expected: ShapClassifierExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShapClassifierExpected {
+    /// Expected value E[f] per class (`len == n_classes`).
+    pub base_values: Vec<f64>,
+    /// Shapley values indexed `[sample][class][feature]`.
+    pub shap_values: Vec<Vec<Vec<f64>>>,
+}
+
+/// A fitted `RandomForestRegressor` explained by shap's path-dependent
+/// `TreeExplainer`: like [`ForestShapClassifierCase`] but scalar `base_value` and
+/// `shap_values` indexed `[sample][feature]`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForestShapRegressorCase {
+    pub trees: Vec<RegTree>,
+    pub n_features: usize,
+    pub test_coo: CooTable,
+    pub expected: ShapRegressorExpected,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShapRegressorExpected {
+    pub base_value: f64,
+    /// Shapley values indexed `[sample][feature]`.
+    pub shap_values: Vec<Vec<f64>>,
 }
 
 /// One empirically-calibrated score band for the AGGREGATE tier. `metric` is
@@ -486,5 +532,22 @@ pub fn assert_close_slice(got: &[f64], expected: &[f64], tol: &Tolerance, what: 
     );
     for (i, (g, e)) in got.iter().zip(expected).enumerate() {
         assert_close(*g, *e, tol, &format!("{what}[{i}]"));
+    }
+}
+
+/// Row-wise [`assert_close_slice`] over two equal-shape matrices — the 2D
+/// analogue used by the TreeSHAP oracle (per-class or per-sample rows). The 3D
+/// classifier case loops this once per class.
+#[track_caller]
+pub fn assert_close_matrix(got: &[Vec<f64>], expected: &[Vec<f64>], tol: &Tolerance, what: &str) {
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{what}: row count mismatch (got {}, expected {})",
+        got.len(),
+        expected.len()
+    );
+    for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+        assert_close_slice(g, e, tol, &format!("{what}[{i}]"));
     }
 }

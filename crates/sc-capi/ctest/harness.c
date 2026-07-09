@@ -14,6 +14,7 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -245,6 +246,71 @@ static void fit_and_predict(sc_context_t *ctx, char out[N_SAMPLES][8]) {
     release_sch(&targets_schema);
 }
 
+/* Fit a classifier, run sc_shap, and assert the additivity identity
+ * (base[o] + sum_f shap[0][o][f] == predict_proba[0][o]) for sample 0. Releases
+ * every output array so the leak-check covers the new release path. */
+static void exercise_shap(sc_context_t *ctx) {
+    sc_coo_table_t table;
+    fill_table(&table);
+    struct ArrowArray targets;
+    struct ArrowSchema targets_schema;
+    make_utf8_array(LABELS, N_SAMPLES, &targets, &targets_schema);
+    sc_rf_params_t params = default_params();
+
+    sc_model_t *model = NULL;
+    sc_status_t st = sc_fit_classifier(ctx, &table, &targets, &targets_schema, &params, &model);
+    assert(st == SC_OK && model != NULL);
+
+    /* predict_proba for the additivity comparison. */
+    struct ArrowArray proba, pclasses;
+    struct ArrowSchema proba_s, pclasses_s;
+    st = sc_predict_proba(ctx, model, &table, &proba, &proba_s, &pclasses, &pclasses_s);
+    assert(st == SC_OK);
+    const int64_t n_classes = pclasses.length;
+    const double *proba_vals = (const double *)proba.children[0]->buffers[1];
+
+    /* TreeSHAP. */
+    sc_shap_result_t shap;
+    st = sc_shap(ctx, model, &table, &shap);
+    assert(st == SC_OK);
+    assert(shap.n_outputs == n_classes);
+    assert(shap.n_features == N_FEATURES);
+    assert(shap.shap_values.length == N_SAMPLES);
+    const int64_t width = shap.n_outputs * shap.n_features;
+    /* FixedSizeList: flat Float64 values live in the single child array. */
+    const double *sv = (const double *)shap.shap_values.children[0]->buffers[1];
+    const double *base = (const double *)shap.base_values.buffers[1];
+
+    for (int64_t o = 0; o < shap.n_outputs; o++) {
+        double row_sum = 0.0;
+        for (int64_t f = 0; f < shap.n_features; f++) {
+            row_sum += sv[0 * width + o * shap.n_features + f];
+        }
+        double recon = base[o] + row_sum;
+        double want = proba_vals[0 * n_classes + o];
+        assert(fabs(recon - want) < 1e-9 && "shap additivity");
+    }
+    printf("  shap: n_outputs=%lld n_features=%lld additive OK\n", (long long)shap.n_outputs,
+           (long long)shap.n_features);
+
+    /* Release every output array (arrow-rs callbacks recurse into children). */
+    release_arr(&shap.shap_values);
+    release_sch(&shap.shap_values_schema);
+    release_arr(&shap.base_values);
+    release_sch(&shap.base_values_schema);
+    release_arr(&shap.classes);
+    release_sch(&shap.classes_schema);
+    release_arr(&proba);
+    release_sch(&proba_s);
+    release_arr(&pclasses);
+    release_sch(&pclasses_s);
+
+    sc_model_free(model);
+    free_table(&table);
+    release_arr(&targets);
+    release_sch(&targets_schema);
+}
+
 static void forced_error(sc_context_t *ctx) {
     sc_coo_table_t table;
     fill_table(&table);
@@ -288,6 +354,7 @@ int main(void) {
         assert(strcmp(preds[i], "b") == 0);
     }
 
+    exercise_shap(ctx);
     forced_error(ctx);
 
     sc_context_free(ctx);
