@@ -683,6 +683,20 @@ fn panic_barrier_maps_to_sc_err_panic() {
 }
 
 #[test]
+fn version_is_nonnull_and_matches_const() {
+    // sc_version() hands back a 'static, NUL-terminated string equal to the
+    // SC_VERSION const (and to the crate version). The pointer must never be
+    // freed — it aliases a compile-time byte string.
+    let p = sc_version();
+    assert!(!p.is_null(), "sc_version returned NULL");
+    let s = unsafe { std::ffi::CStr::from_ptr(p) }
+        .to_str()
+        .expect("sc_version is valid UTF-8");
+    assert_eq!(s, SC_VERSION);
+    assert_eq!(s, env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
 fn context_with_dedicated_pool() {
     // n_threads > 0 builds a dedicated pool; fit must still succeed and match the
     // global-pool result (thread-count invariance from sc-core).

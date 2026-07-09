@@ -1,0 +1,11 @@
+# Run wasm32-wasip1 test/bench binaries under wasmtime (M11 determinism parity).
+# Scoped to the wasip1 target only — native builds and the shipped
+# wasm32-unknown-unknown build are unaffected (this key selects a runner solely
+# for `--target wasm32-wasip1`). Cargo appends the test binary and its libtest
+# args after these tokens, so the executed command is
+# `wasmtime run -- <bin>.wasm <args>`; wasmtime's trailing-var-arg `run` treats
+# the first item after `--` as the module and forwards the rest as guest argv.
+# The determinism/golden suite is scoped fs-free, so no `--dir` preopen is
+# needed. See the Makefile `wasm-test` target and `crates/sc-core/tests/determinism.rs`.
+[target.wasm32-wasip1]
+runner = ["wasmtime", "run", "--"]

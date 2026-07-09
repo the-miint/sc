@@ -1,3 +1,12 @@
+# Vulnerability / yanked-crate gate for the release. `version = 2` selects
+# cargo-deny's current advisory semantics (vulnerabilities always deny;
+# unmaintained/unsound handled by built-in defaults); `yanked = "deny"` makes a
+# yanked dependency a hard blocker rather than a warning. Needs an advisory-DB
+# clone — CI's cargo-deny-action supplies one; `make deny` uses the local cache.
+[advisories]
+version = 2
+yanked = "deny"
+
 [licenses]
 # Permissive licenses compatible with this project's BSD-3-Clause distribution.
 allow = [
@@ -21,6 +30,14 @@ allow = [
 ]
 
 [bans]
+# Warn, not deny: the duplicate versions in the graph (getrandom x3, r-efi x2,
+# winnow x2) arise from two independent, non-wasm sources — (a) the native FFI
+# runtime: ahash's entropy backend under arrow (getrandom 0.3 + its r-efi
+# backend) plus ahash's compile-time-rng (getrandom 0.2 via const-random); and
+# (b) the cbindgen build-tool tree: tempfile pulls getrandom 0.4 + its r-efi
+# backend, and cbindgen's toml parser pulls two winnow lines. Every one lives
+# solely in the native sc-arrow / sc-capi and build-time trees — none reach the
+# wasm-clean sc-core surface, which ci/wasm-audit.sh enforces independently.
 multiple-versions = "warn"
 
 [sources]

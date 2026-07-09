@@ -1,10 +1,18 @@
 [package]
 name = "sc-core"
-description = "Core RandomForest engine for sc (pure Rust)."
+description = "Core RandomForest engine for sc (pure Rust): classification + regression fit/predict, probabilities, feature importances, RFECV, tuning, nested/OOF CV, and TreeSHAP — Arrow-free, FFI-free, wasm-friendly."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords = ["random-forest", "machine-learning", "classification", "shap", "wasm"]
+categories = ["science", "algorithms", "wasm"]
+# Minimum supported Rust version (informational). Chosen as a recent stable; the
+# project is built/tested on current stable and does not gate on this in CI.
+rust-version = "1.85"
+# Internal v1: descriptive metadata, but not published to crates.io.
+publish = false
 
 [dependencies]
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"], optional = true }
@@ -38,6 +46,13 @@ sc-oracle = { path = "../sc-oracle" }
 # the `parallel`-gated thread-count-invariance test in tests/determinism.rs can
 # drive explicit rayon thread pools (mirroring exec.rs's own unit test).
 rayon = "1"
+
+# The persist example needs the `persist` feature; `required-features` makes
+# cargo skip it (rather than fail) under `--no-default-features`. The
+# fit_predict_shap example uses only always-available API and is auto-discovered.
+[[example]]
+name = "persist_roundtrip"
+required-features = ["persist"]
 
 [lints]
 workspace = true

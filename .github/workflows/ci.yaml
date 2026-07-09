@@ -46,12 +46,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          # unknown-unknown = the shipped artifact; wasip1 = the target the
+          # determinism parity suite executes on under wasmtime.
+          targets: wasm32-unknown-unknown, wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
+      # wasmtime runs the wasip1 test binaries (the cargo runner is set in
+      # .cargo/config.toml). The bytecodealliance action avoids install-script
+      # network flakiness.
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
       - name: build wasm32 (minimal core)
         run: cargo build -p sc-core --target wasm32-unknown-unknown --no-default-features
       - name: build wasm32 (with persist)
         run: cargo build -p sc-core --target wasm32-unknown-unknown --no-default-features --features persist
+      # Fail if any native-only dep (rayon/getrandom/crossbeam/arrow) reached the
+      # shipped wasm tree.
+      - name: wasm dependency-surface audit
+        run: make wasm-audit
+      # The frozen golden/digest suite on a wasm VM: green == native == wasm.
+      - name: determinism parity (wasm32-wasip1 under wasmtime)
+        run: make wasm-test
 
   deny:
     runs-on: ubuntu-latest

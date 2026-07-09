@@ -335,6 +335,13 @@ static void forced_error(sc_context_t *ctx) {
 }
 
 int main(void) {
+    /* Version: the runtime string must be non-null and match the compile-time
+     * SC_VERSION macro the header was generated with. */
+    const char *ver = sc_version();
+    assert(ver != NULL && "sc_version returned NULL");
+    assert(strcmp(ver, SC_VERSION) == 0 && "sc_version() != SC_VERSION");
+    printf("  version: %s\n", ver);
+
     sc_context_t *ctx = NULL;
     sc_status_t st = sc_context_new(NULL, &ctx);
     assert(st == SC_OK && ctx != NULL);

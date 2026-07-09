@@ -1,12 +1,23 @@
 //! M0 determinism-harness tests: seed derivation and the thread-count-invariance
 //! guarantee of the execution shim.
+//!
+//! # Cross-platform tripwire (M11)
+//!
+//! Every `*_golden*` test here freezes an output to a hardcoded constant. Those
+//! constants are the load-bearing evidence for the project's native↔wasm
+//! determinism guarantee: this fs-free, oracle-free suite is *also* run on a wasm
+//! VM (`wasm32-wasip1` under wasmtime; see `.cargo/config.toml` and the Makefile
+//! `wasm-test` target), and green there proves the wasm build reproduces the
+//! identical constants — hence native == wasm, transitively. The consolidated
+//! [`cross_platform_model_digest`] test folds a whole fit→predict→proba→shap run
+//! into one hex fingerprint as the single value a reviewer can eyeball.
 
 use std::collections::HashSet;
 
 use sc_core::{
     grow, indexed_map, k_fold, ncv, rfecv, stratified_k_fold, train_test_split, tree_seed, tune,
     Criterion, DetRng, Error, FeatureMatrix, MaxFeatures, NcvParams, OofPredictions, ParamAxis,
-    RandomForest, RandomForestParams, RfeStep, RfecvParams, Targets, TestSize, TreeParams,
+    RandomForest, RandomForestParams, RfeStep, RfecvParams, Targets, Task, TestSize, TreeParams,
     TuningParams,
 };
 // Only the `parallel`-gated invariance test names `Tree` (via `sequential_forest`).
@@ -549,4 +560,143 @@ fn ncv_regression_golden() {
     for (i, (g, e)) in r.importances.iter().zip(&expected_mdi).enumerate() {
         assert!((g - e).abs() < 1e-12, "importances[{i}] = {g} != {e}");
     }
+}
+
+/// A 64-bit FNV-1a accumulator over the raw bits of model outputs, hand-rolled so
+/// the digest test below pulls in no dependency and runs under
+/// `--no-default-features` on wasm. Lengths/indices are folded as `u64` via a
+/// zero-extending `as` cast: every count here fits in 32 bits, so the byte stream
+/// is identical on 32-bit wasm and 64-bit native (the property this digest exists
+/// to prove); `f64`s are folded by their IEEE-754 `to_bits()` (bit-exact, not
+/// tolerance-based).
+struct Fnv1a(u64);
+
+impl Fnv1a {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Fnv1a(Self::OFFSET_BASIS)
+    }
+    fn byte(&mut self, b: u8) {
+        self.0 = (self.0 ^ b as u64).wrapping_mul(Self::PRIME);
+    }
+    fn u64(&mut self, v: u64) {
+        for b in v.to_le_bytes() {
+            self.byte(b);
+        }
+    }
+    fn len(&mut self, v: usize) {
+        self.u64(v as u64);
+    }
+    fn f64(&mut self, v: f64) {
+        self.u64(v.to_bits());
+    }
+    /// Fold a length-prefixed slice of `f64`s. Length-prefixing keeps the digest
+    /// sensitive to shape (a differently-shaped output can't alias the same byte
+    /// stream) — the collision resistance a change-detection tripwire needs; a
+    /// 64-bit hash of an unbounded stream is of course not literally injective.
+    fn f64s(&mut self, vs: &[f64]) {
+        self.len(vs.len());
+        for &v in vs {
+            self.f64(v);
+        }
+    }
+    fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+/// Fold a fit model's full public prediction surface (indices/proba OR values,
+/// then feature importances, then the whole TreeSHAP tensor) into the running
+/// digest.
+fn fold_model(h: &mut Fnv1a, forest: &RandomForest, x: &FeatureMatrix) {
+    match forest.task() {
+        Task::Classification { n_classes } => {
+            h.len(n_classes);
+            let idx = forest.predict_class_indices(x).unwrap();
+            h.len(idx.len());
+            for &i in &idx {
+                h.len(i);
+            }
+            let proba = forest.predict_proba(x).unwrap();
+            h.len(proba.len());
+            for row in &proba {
+                h.f64s(row);
+            }
+        }
+        Task::Regression => {
+            let vals = forest.predict_values(x).unwrap();
+            h.f64s(&vals);
+        }
+    }
+    h.f64s(&forest.feature_importances());
+
+    let shap = forest.tree_shap(x).unwrap();
+    h.len(shap.n_outputs);
+    h.len(shap.n_features);
+    h.f64s(&shap.base_values);
+    h.len(shap.values.len());
+    for sample in &shap.values {
+        for per_output in sample {
+            h.f64s(per_output);
+        }
+    }
+}
+
+/// The M11 cross-platform red criterion, distilled to one number. Over a couple
+/// of fixed `(data, seed)` cases — a classifier and a regressor — fit a forest
+/// and fold `fit → predict → predict_proba/predict_values → feature_importances
+/// → tree_shap` into a single FNV-1a fingerprint, asserted equal to a frozen
+/// constant. Running this same test on a wasm VM (see the module doc) and getting
+/// green is the direct proof that the model + predictions are bit-identical on
+/// native and wasm. A diff here means the compute path drifted on *some*
+/// platform — exactly the regression the guarantee forbids.
+#[test]
+fn cross_platform_model_digest() {
+    let mut h = Fnv1a::new();
+
+    // Case 1: classifier on the shared 12×4, 3-class golden design, two seeds.
+    // `max_features = sqrt` (=2 of 4) so the RNG genuinely drives both bootstrap
+    // and per-node subsampling.
+    let (xc, yc) = forest_golden_data();
+    for &seed in &[20260707u64, 777] {
+        let mut p = RandomForestParams::classifier_defaults();
+        p.n_estimators = 6;
+        p.tree.max_features = MaxFeatures::Sqrt;
+        let forest = RandomForest::fit(&xc, &yc, &p, seed).unwrap();
+        fold_model(&mut h, &forest, &xc);
+    }
+
+    // Case 2: regressor on the same design with a numeric target, two seeds.
+    let xr = dense(&[
+        &[0.0, 1.0, 0.0, 2.0],
+        &[1.0, 0.0, 3.0, 0.0],
+        &[2.0, 2.0, 0.0, 1.0],
+        &[0.0, 3.0, 1.0, 0.0],
+        &[3.0, 0.0, 2.0, 2.0],
+        &[1.0, 1.0, 0.0, 3.0],
+        &[2.0, 0.0, 3.0, 0.0],
+        &[0.0, 2.0, 1.0, 1.0],
+        &[3.0, 3.0, 0.0, 0.0],
+        &[1.0, 0.0, 2.0, 2.0],
+        &[2.0, 1.0, 0.0, 3.0],
+        &[0.0, 0.0, 3.0, 1.0],
+    ]);
+    let yr = Targets::numeric(&[
+        1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
+    ])
+    .unwrap();
+    for &seed in &[20260707u64, 777] {
+        let mut p = RandomForestParams::regressor_defaults();
+        p.n_estimators = 6;
+        let forest = RandomForest::fit(&xr, &yr, &p, seed).unwrap();
+        fold_model(&mut h, &forest, &xr);
+    }
+
+    let digest = h.finish();
+    assert_eq!(
+        digest, 0x95a3_1ff9_410a_938e,
+        "cross-platform model digest changed: {digest:#018x}"
+    );
 }

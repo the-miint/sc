@@ -58,6 +58,26 @@ pub const SC_ERR_PANIC: sc_status_t = -99;
 pub const SC_ERR_UNKNOWN: sc_status_t = -100;
 
 // ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+/// The sc library version (the workspace `Cargo.toml` version). cbindgen emits
+/// this as `#define SC_VERSION "x.y.z"`; [`sc_version`] returns the identical
+/// string at runtime, so a C caller can compare the header it compiled against
+/// with the library it linked.
+pub const SC_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Return the sc library version as a `'static`, NUL-terminated C string.
+///
+/// The pointer is valid for the whole program lifetime and must NOT be freed: it
+/// aliases a compile-time byte string (`concat!` appends the terminating NUL), so
+/// there is no allocation, no leak, and no lifetime concern.
+#[no_mangle]
+pub extern "C" fn sc_version() -> *const c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+}
+
+// ---------------------------------------------------------------------------
 // Parameter / config / result POD types (cbindgen emits these)
 // ---------------------------------------------------------------------------
 
