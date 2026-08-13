@@ -1,9 +1,11 @@
 # sc
 
 A pure-Rust reimplementation of the RandomForest classification and regression
-workflows from [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier),
-usable as a Rust library, as a WebAssembly module, or through a reentrant C-API
-centered on Apache Arrow for C/C++ consumers.
+workflows from [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier)
+([Bokulich et al. 2018](https://doi.org/10.21105/joss.00934) — **please cite this
+if you use `sc`**; see [Citation & attribution](#citation--attribution)), usable
+as a Rust library, as a WebAssembly module, or through a reentrant C-API centered
+on Apache Arrow for C/C++ consumers.
 
 - **Scope (v1):** RandomForest classifier + regressor — fit/predict, class
   probabilities, feature importances, RFECV feature selection, randomized
@@ -147,6 +149,40 @@ make deny       # cargo-deny: licenses / advisories / bans / sources
 Third-party dependency licenses are catalogued in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
+## Citation & attribution
+
+`sc` is a reimplementation, not a new method. The workflows, the reported
+metrics, and the parameter semantics are all q2-sample-classifier's; the
+contribution here is a portable, deterministic implementation of them.
+
+**If you use `sc` in published work, cite the upstream paper:**
+
+> Bokulich NA, Dillon MR, Bolyen E, Kaehler BD, Huttley GA, Caporaso JG.
+> **q2-sample-classifier: machine-learning tools for microbiome classification
+> and regression.** *Journal of Open Source Software* 2018;3(30):934.
+> doi:[10.21105/joss.00934](https://doi.org/10.21105/joss.00934)
+> ([JOSS](https://joss.theoj.org/papers/10.21105/joss.00934),
+> [PMC6759219](https://pmc.ncbi.nlm.nih.gov/articles/PMC6759219/))
+
+Cite [scikit-learn](https://scikit-learn.org) (Pedregosa et al. 2011) as well —
+its RandomForest semantics are what both q2-sample-classifier and `sc`
+implement. If you use `tree_shap`, also cite TreeSHAP (Lundberg et al. 2018).
+Add a citation of this repository on top only where the specific implementation
+matters, e.g. for reproducibility or provenance.
+
+[CITATION.cff](CITATION.cff) carries all of the above in machine-readable form —
+`sc` itself plus every work it builds on, including the two source studies for
+the real datasets used in the oracle fixtures.
+
+Upstream ([q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier),
+BSD-3-Clause, © QIIME 2 development team) is not vendored into any `sc` crate,
+but its test suite does supply two datasets whose derived values are committed as
+oracle fixtures. That redistribution and the full upstream notice are documented
+in [THIRD_PARTY_LICENSES.md §(d)](THIRD_PARTY_LICENSES.md#d-upstream-reference-implementation-and-oracle-environment).
+
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).
+
+`sc` is an independent reimplementation and is not affiliated with or endorsed by
+the QIIME 2 development team.

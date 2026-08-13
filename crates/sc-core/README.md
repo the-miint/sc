@@ -44,6 +44,16 @@ cargo run -p sc-core --example fit_predict_shap
 See the crate root docs and the [workspace README](../../README.md) for the full
 quickstart, the wasm/determinism story, and the C-API.
 
+## Citation
+
+The workflows here are q2-sample-classifier's; this crate reimplements them. Cite
+Bokulich et al., *J Open Source Softw* 2018;3(30):934,
+doi:[10.21105/joss.00934](https://doi.org/10.21105/joss.00934), plus scikit-learn
+(Pedregosa et al. 2011) — and TreeSHAP (Lundberg et al. 2018, arXiv:1802.03888)
+if you use `tree_shap`. Full list:
+[CITATION.cff](../../CITATION.cff); attribution details:
+[Citation & attribution](../../README.md#citation--attribution).
+
 ## License
 
 BSD 3-Clause. See [LICENSE](../../LICENSE).

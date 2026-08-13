@@ -5,7 +5,8 @@
 //! tree structure + per-node cover (`weighted_n_node_samples`) — there is no RNG
 //! and no background dataset. This is why M4/M5 retained per-node cover: the tree
 //! is "SHAP-ready". The algorithm is Lundberg et al. 2018 ("Consistent
-//! Individualized Feature Attribution for Tree Ensembles", Algorithm 2): the
+//! Individualized Feature Attribution for Tree Ensembles", arXiv:1802.03888,
+//! Algorithm 2 — cite this if you publish `tree_shap` results): the
 //! O(TLD²) EXTEND/UNWIND recursion over each tree's unique-feature decision path,
 //! with the reference distribution given by node cover
 //! (`feature_perturbation="tree_path_dependent"` in the Python `shap` library).

@@ -1,8 +1,16 @@
 # Third-party licenses
 
-`sc` is BSD-3-Clause (see [LICENSE](LICENSE)). It depends on the third-party
-crates below, grouped by *where the code ends up*. Every license here is on the
-`deny.toml` allow-list, and `cargo deny check` enforces that at each release.
+`sc` is BSD-3-Clause (see [LICENSE](LICENSE)). Sections (a)–(c) below catalog the
+third-party *crates*, grouped by *where the code ends up*. Every license there is
+on the `deny.toml` allow-list, and `cargo deny check` enforces that at each
+release.
+
+Section (d) covers what `cargo deny` cannot see: the upstream project `sc`
+reimplements ([q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier))
+and the Python oracle environment used to generate the committed test fixtures.
+Six of those fixtures embed data derived from the upstream test suite, so (d)
+reproduces the applicable BSD-3-Clause notice in full. For the papers to cite,
+see [CITATION.cff](CITATION.cff).
 
 This list is compiled from `cargo tree` / `cargo metadata` (not from memory)
 against the committed `Cargo.lock`. Regenerate it if the lockfile changes — note
@@ -135,3 +143,94 @@ BSD-3-Clause code) and `CC0-1.0` (tiny-keccak — a public-domain dedication und
 Not listed: the dev-only `sc-oracle` crate and its `serde` / `serde_json`
 dependency (both MIT OR Apache-2.0) are used solely by the test suite — they are
 never compiled into `sc-core`, the native FFI libraries, or the wasm artifact.
+
+## (d) Upstream reference implementation and oracle environment
+
+`cargo deny` sees only the Cargo graph, so it cannot cover this tier: the project
+`sc` reimplements, and the Python environment whose outputs are committed as the
+oracle fixtures under [`oracle/fixtures/`](oracle/fixtures). None of it is a
+build or runtime dependency of any `sc` artifact — reproducing the fixtures
+(`make regen-fixtures`) is the only operation that needs it, and the fixtures
+themselves are consumed only by the test suite. Versions below are the resolved
+`qiime2-amplicon-2024.10` environment recorded in every fixture's `generator`
+block; licenses are the package metadata from that environment.
+
+| Project | Version | License | Role in `sc` |
+| --- | --- | --- | --- |
+| [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier) | 2024.10.0 | BSD-3-Clause | **The reimplemented upstream.** Defines the workflows and reported metrics; `visuals.py` is the arbiter for `sc-core::metrics`, and its test suite supplies two datasets (below) |
+| qiime2 | 2024.10.1 | BSD-3-Clause | Loads the `.qza` tables in the aggregate generators |
+| scikit-learn | 1.4.2 | BSD-3-Clause | Numeric oracle for trees, forests, RFECV, CV splits, metrics |
+| scipy | 1.13.0 | BSD-3-Clause | Oracle for `linregress` / rank statistics |
+| numpy | 1.26.4 | BSD-3-Clause | Seeded generation of the synthetic cases |
+| pandas | 2.2.2 | BSD-3-Clause | Sample-metadata handling in the generators |
+| biom-format | 2.1.15 | BSD-3-Clause | Feature-table view behind the `.qza` loads |
+| [shap](https://github.com/shap/shap) | 0.49.1 | MIT | Oracle for path-dependent TreeSHAP (`gen_shap.py`); not used by q2 itself |
+
+`sc-core`'s implementation is written from the documented behavior of these
+libraries and validated numerically against them; no upstream source is vendored
+into any `sc` crate. `crates/sc-core/src/metrics/` is the closest coupling — a
+deliberate port of the values `q2-sample-classifier`'s `visuals.py` reports — and
+is attributed as such in the module documentation.
+
+### Redistributed fixture data — BSD-3-Clause notice retained
+
+Most fixtures are built from seeded synthetic data and carry no third-party
+copyright. **Six do not.** These embed feature-table values and sample metadata
+derived from real datasets distributed in the `q2-sample-classifier` test suite
+(upstream paths relative to `q2_sample_classifier/tests/data/`), and are
+therefore redistributions of third-party material:
+
+| Fixture | Upstream source files | Samples × features |
+| --- | --- | --- |
+| `oracle/fixtures/forest/agg_chardonnay.json` | `chardonnay.table.qza` + `chardonnay.map.txt` (`Region`) | 21 × 281 |
+| `oracle/fixtures/ncv/agg_chardonnay.json` | same | 21 × 281 |
+| `oracle/fixtures/rfe/agg_chardonnay.json` | same | 21 × 40 |
+| `oracle/fixtures/forest/agg_ecam.json` | `ecam-table-maturity.qza` + `ecam_map_maturity.txt` (`month`) | 126 × 150 |
+| `oracle/fixtures/ncv/agg_ecam.json` | same | 126 × 150 |
+| `oracle/fixtures/rfe/agg_ecam.json` | same | 126 × 40 |
+
+The values are not verbatim copies — the generators load each table through
+`qiime2`/`biom`, apply the filtering and feature subsetting described in each
+generator, and emit COO triplets alongside the reference score bands — but they
+are *derived from* the upstream files, so BSD-3-Clause condition 1 applies and
+the notice is retained here in full:
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2017-2026, QIIME 2 development team.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+Since the fixtures are read only by the test suite, this material never reaches
+`sc-core`, the native FFI libraries, or the shipped wasm artifact — no binary
+distribution of `sc` contains it.
+
+The two datasets originate from published studies; cite those, not the test
+suite, if you reuse the data. They are listed with the rest of the references in
+[CITATION.cff](CITATION.cff).

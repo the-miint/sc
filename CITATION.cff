@@ -1,0 +1,204 @@
+cff-version: 1.2.0
+title: >-
+  sc: a pure-Rust reimplementation of the q2-sample-classifier RandomForest
+  workflows
+abstract: >-
+  sc reimplements the RandomForest classification and regression workflows of
+  q2-sample-classifier (Bokulich et al. 2018) in pure Rust, usable as a Rust
+  library, a WebAssembly module, or through a reentrant Apache-Arrow-based
+  C-API. It is statistically equivalent to q2-sample-classifier — validated
+  against oracle fixtures generated from a pinned QIIME 2 / scikit-learn
+  environment — and bit-reproducible for a fixed (data, seed) on every
+  platform, including wasm32.
+type: software
+version: 1.0.0
+date-released: '2026-07-09'
+license: BSD-3-Clause
+repository-code: 'https://github.com/the-miint/sc'
+authors:
+  - family-names: McDonald
+    given-names: Daniel
+    email: d3mcdonald@health.ucsd.edu
+    affiliation: University of California San Diego
+keywords:
+  - random forest
+  - machine learning
+  - microbiome
+  - qiime2
+  - rust
+  - webassembly
+  - reproducibility
+message: >-
+  sc is a reimplementation, not an original method. If you use sc in published
+  work, please cite the q2-sample-classifier paper (Bokulich et al. 2018,
+  doi:10.21105/joss.00934) — the first reference below — which describes the
+  workflows sc reproduces, along with scikit-learn (Pedregosa et al. 2011),
+  whose RandomForest semantics both implementations follow. Cite this software
+  entry in addition if the specific implementation matters to your work (e.g.
+  for reproducibility or provenance).
+references:
+  # The work sc reimplements — cite this first and always.
+  - type: article
+    title: >-
+      q2-sample-classifier: machine-learning tools for microbiome
+      classification and regression
+    authors:
+      - family-names: Bokulich
+        given-names: Nicholas A.
+      - family-names: Dillon
+        given-names: Matthew R.
+      - family-names: Bolyen
+        given-names: Evan
+      - family-names: Kaehler
+        given-names: Benjamin D.
+      - family-names: Huttley
+        given-names: Gavin A.
+      - family-names: Caporaso
+        given-names: J. Gregory
+    journal: Journal of Open Source Software
+    year: 2018
+    volume: 3
+    issue: 30
+    start: 934
+    doi: 10.21105/joss.00934
+    notes: >-
+      Also available as PMCID PMC6759219. Upstream software:
+      https://github.com/qiime2/q2-sample-classifier (BSD-3-Clause).
+  # The estimator semantics both q2-sample-classifier and sc implement, and the
+  # oracle against which sc's fixtures are generated.
+  - type: article
+    title: 'Scikit-learn: Machine learning in Python'
+    authors:
+      - family-names: Pedregosa
+        given-names: Fabian
+      - family-names: Varoquaux
+        given-names: Gaël
+      - family-names: Gramfort
+        given-names: Alexandre
+      - family-names: Michel
+        given-names: Vincent
+      - family-names: Thirion
+        given-names: Bertrand
+      - family-names: Grisel
+        given-names: Olivier
+      - family-names: Blondel
+        given-names: Mathieu
+      - family-names: Prettenhofer
+        given-names: Peter
+      - family-names: Weiss
+        given-names: Ron
+      - family-names: Dubourg
+        given-names: Vincent
+      - family-names: Vanderplas
+        given-names: Jake
+      - family-names: Passos
+        given-names: Alexandre
+      - family-names: Cournapeau
+        given-names: David
+      - family-names: Brucher
+        given-names: Matthieu
+      - family-names: Perrot
+        given-names: Matthieu
+      - family-names: Duchesnay
+        given-names: Édouard
+    journal: Journal of Machine Learning Research
+    year: 2011
+    volume: 12
+    start: 2825
+    end: 2830
+  # The algorithm behind `RandomForest::tree_shap` (path-dependent TreeSHAP,
+  # Algorithm 2) and the Shapley-value framework it rests on.
+  - type: article
+    title: Consistent Individualized Feature Attribution for Tree Ensembles
+    authors:
+      - family-names: Lundberg
+        given-names: Scott M.
+      - family-names: Erion
+        given-names: Gabriel G.
+      - family-names: Lee
+        given-names: Su-In
+    year: 2018
+    journal: arXiv
+    doi: 10.48550/arXiv.1802.03888
+    notes: 'arXiv:1802.03888. Source of path-dependent TreeSHAP (Algorithm 2).'
+  - type: conference-paper
+    title: A Unified Approach to Interpreting Model Predictions
+    authors:
+      - family-names: Lundberg
+        given-names: Scott M.
+      - family-names: Lee
+        given-names: Su-In
+    collection-title: Advances in Neural Information Processing Systems 30
+    year: 2017
+    start: 4765
+    end: 4774
+  # Studies that produced the two real datasets whose values are embedded in
+  # sc's committed oracle fixtures (via the q2-sample-classifier test suite).
+  # See oracle/fixtures/NOTICE.md.
+  - type: article
+    title: >-
+      Associations among Wine Grape Microbiome, Metabolome, and Fermentation
+      Behavior Suggest Microbial Contribution to Regional Wine Characteristics
+    authors:
+      - family-names: Bokulich
+        given-names: Nicholas A.
+      - family-names: Collins
+        given-names: Thomas S.
+      - family-names: Masarweh
+        given-names: Chad
+      - family-names: Allen
+        given-names: Greg
+      - family-names: Heymann
+        given-names: Hildegarde
+      - family-names: Ebeler
+        given-names: Susan E.
+      - family-names: Mills
+        given-names: David A.
+    journal: mBio
+    year: 2016
+    volume: 7
+    issue: 3
+    doi: 10.1128/mBio.00631-16
+    notes: Source study for the `chardonnay` oracle fixtures.
+  - type: article
+    title: >-
+      Antibiotics, birth mode, and diet shape microbiome maturation during
+      early life
+    authors:
+      - family-names: Bokulich
+        given-names: Nicholas A.
+      - family-names: Chung
+        given-names: Jennifer
+      - family-names: Battaglia
+        given-names: Thomas
+      - family-names: Henderson
+        given-names: Nora
+      - family-names: Jay
+        given-names: Melanie
+      - family-names: Li
+        given-names: Huilin
+      - family-names: Lieber
+        given-names: Arnon D.
+      - family-names: Wu
+        given-names: Fen
+      - family-names: Perez-Perez
+        given-names: Guillermo I.
+      - family-names: Chen
+        given-names: Yu
+      - family-names: Schweizer
+        given-names: William
+      - family-names: Zheng
+        given-names: Xuhui
+      - family-names: Contreras
+        given-names: Monica
+      - family-names: Dominguez-Bello
+        given-names: Maria Gloria
+      - family-names: Blaser
+        given-names: Martin J.
+    journal: Science Translational Medicine
+    year: 2016
+    volume: 8
+    issue: 343
+    start: 343ra82
+    doi: 10.1126/scitranslmed.aad7121
+    notes: Source study (ECAM) for the `ecam` oracle fixtures.

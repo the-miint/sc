@@ -3,6 +3,15 @@
 //! `sc-core`: the pure-Rust core of `sc`, a reimplementation of
 //! q2-sample-classifier's RandomForest workflows.
 //!
+//! **Citation.** The workflows implemented here are q2-sample-classifier's; this
+//! crate is an independent implementation of them, not a new method. If you use
+//! it in published work, cite Bokulich NA, Dillon MR, Bolyen E, Kaehler BD,
+//! Huttley GA, Caporaso JG, "q2-sample-classifier: machine-learning tools for
+//! microbiome classification and regression", *J Open Source Softw*
+//! 2018;3(30):934, [doi:10.21105/joss.00934](https://doi.org/10.21105/joss.00934),
+//! along with scikit-learn (Pedregosa et al. 2011). See `CITATION.cff` at the
+//! repository root for the full reference list.
+//!
 //! This crate is Arrow-free and FFI-free so it stays trivial to compile for
 //! `wasm32` and easy to unit-test. Arrow marshaling and the C-API live in
 //! sibling crates added by later milestones.
