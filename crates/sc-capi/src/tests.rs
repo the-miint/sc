@@ -578,7 +578,10 @@ fn model_feature_ids_round_trip_through_serialization() {
         let read_ids = |m: *const sc_model_t| {
             let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
             let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
-            assert_eq!(sc_model_feature_ids(m, a.as_mut_ptr(), s.as_mut_ptr()), SC_OK);
+            assert_eq!(
+                sc_model_feature_ids(m, a.as_mut_ptr(), s.as_mut_ptr()),
+                SC_OK
+            );
             let arr = StringArray::from(from_ffi(a.assume_init(), &s.assume_init()).unwrap());
             (0..arr.len())
                 .map(|i| arr.value(i).to_string())
