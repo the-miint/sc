@@ -31,9 +31,40 @@ where
     }
 }
 
+/// Fill `buf` in consecutive `width`-sized chunks, calling `f(i, chunk)` for
+/// chunk `i`.
+///
+/// The in-place sibling of [`indexed_map`]: each chunk is written by exactly one
+/// call that depends only on its index, so the result is identical with or
+/// without the `parallel` feature and at any thread count. Writing straight into
+/// one caller-owned buffer avoids a per-index allocation and the copy that would
+/// join them. A trailing partial chunk is passed as-is; `width == 0` is a no-op.
+pub fn fill_chunks<T, F>(buf: &mut [T], width: usize, f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut [T]) + Send + Sync,
+{
+    if width == 0 {
+        return;
+    }
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        buf.par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(i, chunk)| f(i, chunk));
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        buf.chunks_mut(width)
+            .enumerate()
+            .for_each(|(i, chunk)| f(i, chunk));
+    }
+}
+
 #[cfg(all(test, feature = "parallel"))]
 mod tests {
-    use super::indexed_map;
+    use super::{fill_chunks, indexed_map};
     use crate::tree_seed;
 
     // Deterministic, pure per-index value; no shared state.
@@ -53,6 +84,31 @@ mod tests {
                 .build()
                 .unwrap();
             let got = pool.install(|| indexed_map(n, work));
+            assert_eq!(got, reference, "output changed with {k} threads");
+        }
+    }
+
+    /// Same invariant for the in-place form, with a width that leaves no chunk
+    /// boundary aligned to a thread split by accident.
+    #[test]
+    fn fill_chunks_is_invariant_to_thread_count() {
+        let (n, width) = (257usize, 3usize);
+        let fill = |i: usize, chunk: &mut [u64]| {
+            for (j, v) in chunk.iter_mut().enumerate() {
+                *v = work(i) ^ j as u64;
+            }
+        };
+        let mut reference = vec![0u64; n * width];
+        for (i, chunk) in reference.chunks_mut(width).enumerate() {
+            fill(i, chunk);
+        }
+        for k in [1usize, 8] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(k)
+                .build()
+                .unwrap();
+            let mut got = vec![0u64; n * width];
+            pool.install(|| fill_chunks(&mut got, width, fill));
             assert_eq!(got, reference, "output changed with {k} threads");
         }
     }

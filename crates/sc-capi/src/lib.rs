@@ -38,7 +38,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
 use sc_core::{
-    ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, ShapValues, Task,
+    ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, ShapValuesFlat, Task,
 };
 
 // ---------------------------------------------------------------------------
@@ -905,8 +905,8 @@ pub unsafe extern "C" fn sc_shap(
         let x = import_matrix(table)?;
         let xf = features_for(&model.bundle, &x)?;
         let forest = &model.bundle.forest;
-        let shap = run_in_pool(ctx, || forest.tree_shap(&xf))?;
-        write_shap_result(&shap, forest, out)?;
+        let shap = run_in_pool(ctx, || forest.tree_shap_flat(&xf))?;
+        write_shap_result(shap, forest, out)?;
         Ok(())
     })
 }
@@ -932,20 +932,16 @@ unsafe fn init_empty_shap_result(out: *mut sc_shap_result_t) {
 }
 
 unsafe fn write_shap_result(
-    shap: &ShapValues,
+    shap: ShapValuesFlat,
     forest: &RandomForest,
     out: *mut sc_shap_result_t,
 ) -> Result<(), sc_arrow::MarshalError> {
     use std::ptr::addr_of_mut;
     let width = shap.n_outputs * shap.n_features;
-    // Flatten each sample's [output][feature] into one output-major row.
-    let rows: Vec<Vec<f64>> = shap
-        .values
-        .iter()
-        .map(|per_output| per_output.iter().flatten().copied().collect())
-        .collect();
-    sc_arrow::export_fixed_size_list(
-        &rows,
+    // Already one output-major row per sample, so the buffer itself becomes the
+    // Arrow array: the attribution matrix is never held twice.
+    sc_arrow::export_fixed_size_list_flat(
+        shap.values,
         width,
         addr_of_mut!((*out).shap_values),
         addr_of_mut!((*out).shap_values_schema),

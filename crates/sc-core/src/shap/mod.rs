@@ -27,7 +27,7 @@
 //! `#![forbid(unsafe_code)]`, Arrow-free, and wasm-clean.
 
 use crate::data::FeatureMatrix;
-use crate::exec::indexed_map;
+use crate::exec::fill_chunks;
 use crate::forest::RandomForest;
 use crate::tree::{Task, Tree};
 use crate::{Error, Result};
@@ -75,6 +75,24 @@ impl ShapValues {
     }
 }
 
+/// [`ShapValues`] as one flat buffer, as returned by
+/// [`RandomForest::tree_shap_flat`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapValuesFlat {
+    /// Number of explained samples.
+    pub n_samples: usize,
+    /// Number of explained outputs: `n_classes` (classifier) or `1` (regressor).
+    pub n_outputs: usize,
+    /// Number of input features.
+    pub n_features: usize,
+    /// Expected model value E[f] per output (`len == n_outputs`).
+    pub base_values: Vec<f64>,
+    /// Shapley values, `len == n_samples * n_outputs * n_features`, indexed
+    /// `[(sample * n_outputs + output) * n_features + feature]` — output-major
+    /// within a sample.
+    pub values: Vec<f64>,
+}
+
 impl RandomForest {
     /// Path-dependent TreeSHAP over the forest. A classifier explains
     /// `predict_proba` (one attribution set per class); a regressor explains
@@ -83,6 +101,35 @@ impl RandomForest {
     /// Errors (`InvalidInput`) on a feature-count mismatch between `x` and the
     /// forest.
     pub fn tree_shap(&self, x: &FeatureMatrix) -> Result<ShapValues> {
+        let flat = self.tree_shap_flat(x)?;
+        let (n_outputs, n_features) = (flat.n_outputs, flat.n_features);
+        let values: Vec<Vec<Vec<f64>>> = (0..flat.n_samples)
+            .map(|s| {
+                (0..n_outputs)
+                    .map(|o| {
+                        let at = (s * n_outputs + o) * n_features;
+                        flat.values[at..at + n_features].to_vec()
+                    })
+                    .collect::<Vec<Vec<f64>>>()
+            })
+            .collect();
+        Ok(ShapValues {
+            n_outputs,
+            n_features,
+            base_values: flat.base_values,
+            values,
+        })
+    }
+
+    /// [`tree_shap`](Self::tree_shap) into one flat buffer, indexed
+    /// `values[(sample * n_outputs + output) * n_features + feature]`.
+    ///
+    /// Each sample's attributions are written straight into its own slice, so the
+    /// matrix exists exactly once — no per-sample allocation and no copy to join
+    /// them. This is the layout the C API exports; at the sizes TreeSHAP reaches
+    /// (samples × outputs × features doubles) the nested form's extra copies are
+    /// what run out of memory first, notably on wasm32.
+    pub fn tree_shap_flat(&self, x: &FeatureMatrix) -> Result<ShapValuesFlat> {
         if x.n_features() != self.n_features() {
             return Err(Error::InvalidInput(format!(
                 "tree_shap: forest expects {} features, got {}",
@@ -114,7 +161,7 @@ impl RandomForest {
 
         // Bucket the sparse table's stored entries by sample once (O(nnz)); each
         // sample then scatters its entries into a dense scratch row. Fanning out
-        // over samples via `indexed_map` keeps the result thread-count-invariant
+        // over samples via `fill_chunks` keeps the result thread-count-invariant
         // (each closure owns its scratch), matching `fit`/`predict`.
         let mut by_row: Vec<Vec<(usize, f64)>> = vec![Vec::new(); x.n_samples()];
         for f in 0..n_features {
@@ -123,7 +170,9 @@ impl RandomForest {
             }
         }
 
-        let values = indexed_map(x.n_samples(), |s| {
+        let width = n_outputs * n_features;
+        let mut values = vec![0.0f64; x.n_samples() * width];
+        fill_chunks(&mut values, width, |s, row| {
             let mut scratch = vec![0.0f64; n_features];
             for &(f, v) in &by_row[s] {
                 scratch[f] = v;
@@ -143,17 +192,16 @@ impl RandomForest {
                     ROOT_SENTINEL,
                 );
             }
-            // Transpose to [output][feature] and scale by 1/n_trees.
-            let mut out = vec![vec![0.0f64; n_features]; n_outputs];
+            // Transpose into this sample's output-major row, scaled by 1/n_trees.
             for f in 0..n_features {
-                for (o, orow) in out.iter_mut().enumerate() {
-                    orow[f] = phi[f * n_outputs + o] * inv_trees;
+                for o in 0..n_outputs {
+                    row[o * n_features + f] = phi[f * n_outputs + o] * inv_trees;
                 }
             }
-            out
         });
 
-        Ok(ShapValues {
+        Ok(ShapValuesFlat {
+            n_samples: x.n_samples(),
             n_outputs,
             n_features,
             base_values,
