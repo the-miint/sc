@@ -411,7 +411,7 @@ pub unsafe fn export_fixed_size_list_flat(
     if width == 0 {
         return Err(MarshalError::arrow("fixed_size_list: width must be >= 1"));
     }
-    if values.len() % width != 0 {
+    if !values.len().is_multiple_of(width) {
         return Err(MarshalError::arrow(format!(
             "fixed_size_list: {} values is not a whole number of rows of width {width}",
             values.len()
