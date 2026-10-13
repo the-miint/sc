@@ -38,7 +38,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
 use sc_core::{
-    ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, ShapValues, Task,
+    ncv, FeatureMatrix, ModelBundle, NcvResult, OofPredictions, RandomForest, ShapValuesFlat, Task,
 };
 
 // ---------------------------------------------------------------------------
@@ -813,6 +813,52 @@ unsafe fn write_cv_result(
 }
 
 // ---------------------------------------------------------------------------
+// Model introspection
+// ---------------------------------------------------------------------------
+
+/// Export the model's feature ids as a `Utf8` array, aligned to its columns.
+///
+/// This is the training vocabulary, and it is what makes a model reusable
+/// across datasets. sc validates only the feature *count*
+/// (`RandomForest::check_features`), so a caller that re-derives its own
+/// encoding from prediction data produces silently wrong answers whenever the
+/// two datasets differ by one feature in each direction — same width, different
+/// meaning. Encoding prediction columns against this list instead makes that
+/// case correct: unseen features are dropped, and features missing from the
+/// prediction data are simply absent from the sparse matrix, which already
+/// means zero.
+///
+/// It is also what labels [`sc_feature_importances`], which returns bare
+/// `Float64` values with no names of its own.
+///
+/// The caller owns the exported array and must invoke its `release` callback.
+/// Returns `SC_ERR_INVALID_INPUT` for a model fit without feature ids (the
+/// `feature_ids` fields of its `sc_coo_table_t` were absent) — the array is a
+/// hard requirement for correct prediction, so an explicit error beats an empty
+/// sentinel the caller might mistake for "no features".
+#[no_mangle]
+pub unsafe extern "C" fn sc_model_feature_ids(
+    model: *const sc_model_t,
+    out: *mut FFI_ArrowArray,
+    out_schema: *mut FFI_ArrowSchema,
+) -> sc_status_t {
+    guard(std::ptr::null(), || {
+        let model = req_ref(model, "model")?;
+        if out.is_null() || out_schema.is_null() {
+            return Err(ApiError::null("out"));
+        }
+        let ids = model.bundle.feature_ids.as_ref().ok_or_else(|| {
+            ApiError::new(
+                SC_ERR_INVALID_INPUT,
+                "model has no feature ids (it was fit from a table without them)".to_string(),
+            )
+        })?;
+        sc_arrow::export_utf8(ids, out, out_schema)?;
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Feature importances
 // ---------------------------------------------------------------------------
 
@@ -859,8 +905,8 @@ pub unsafe extern "C" fn sc_shap(
         let x = import_matrix(table)?;
         let xf = features_for(&model.bundle, &x)?;
         let forest = &model.bundle.forest;
-        let shap = run_in_pool(ctx, || forest.tree_shap(&xf))?;
-        write_shap_result(&shap, forest, out)?;
+        let shap = run_in_pool(ctx, || forest.tree_shap_flat(&xf))?;
+        write_shap_result(shap, forest, out)?;
         Ok(())
     })
 }
@@ -886,20 +932,16 @@ unsafe fn init_empty_shap_result(out: *mut sc_shap_result_t) {
 }
 
 unsafe fn write_shap_result(
-    shap: &ShapValues,
+    shap: ShapValuesFlat,
     forest: &RandomForest,
     out: *mut sc_shap_result_t,
 ) -> Result<(), sc_arrow::MarshalError> {
     use std::ptr::addr_of_mut;
     let width = shap.n_outputs * shap.n_features;
-    // Flatten each sample's [output][feature] into one output-major row.
-    let rows: Vec<Vec<f64>> = shap
-        .values
-        .iter()
-        .map(|per_output| per_output.iter().flatten().copied().collect())
-        .collect();
-    sc_arrow::export_fixed_size_list(
-        &rows,
+    // Already one output-major row per sample, so the buffer itself becomes the
+    // Arrow array: the attribution matrix is never held twice.
+    sc_arrow::export_fixed_size_list_flat(
+        shap.values,
         width,
         addr_of_mut!((*out).shap_values),
         addr_of_mut!((*out).shap_values_schema),

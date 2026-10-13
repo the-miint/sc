@@ -391,7 +391,33 @@ pub unsafe fn export_fixed_size_list(
         }
         flat.extend_from_slice(row);
     }
-    let values = Arc::new(Float64Array::from(flat));
+    export_fixed_size_list_flat(flat, width, out_a, out_s)
+}
+
+/// Export an already row-major buffer of `n_rows * width` doubles as
+/// `FixedSizeList<Float64>[width]`, taking ownership: the `Vec` becomes the
+/// child array's buffer without a copy. Use it when the caller already holds the
+/// flat layout — for TreeSHAP's samples × outputs × features matrix, the
+/// row-slice form above would hold the data twice while exporting.
+///
+/// # Safety
+/// See [`write_ffi`].
+pub unsafe fn export_fixed_size_list_flat(
+    values: Vec<f64>,
+    width: usize,
+    out_a: *mut FFI_ArrowArray,
+    out_s: *mut FFI_ArrowSchema,
+) -> Result<(), MarshalError> {
+    if width == 0 {
+        return Err(MarshalError::arrow("fixed_size_list: width must be >= 1"));
+    }
+    if !values.len().is_multiple_of(width) {
+        return Err(MarshalError::arrow(format!(
+            "fixed_size_list: {} values is not a whole number of rows of width {width}",
+            values.len()
+        )));
+    }
+    let values = Arc::new(Float64Array::from(values));
     let field = Arc::new(Field::new("item", DataType::Float64, false));
     let list = FixedSizeListArray::try_new(field, width as i32, values, None)
         .map_err(|e| MarshalError::arrow(e.to_string()))?;

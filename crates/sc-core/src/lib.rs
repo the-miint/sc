@@ -46,7 +46,7 @@ pub use partition::{k_fold, stratified_k_fold, train_test_split, CvFolds, Split,
 pub use persist::ModelBundle;
 pub use rfe::{rfecv, RfeStep, RfecvParams, RfecvResult};
 pub use rng::{tree_seed, DetRng};
-pub use shap::ShapValues;
+pub use shap::{ShapValues, ShapValuesFlat};
 pub use tree::criterion::{entropy, gini, variance};
 pub use tree::{grow, Criterion, MaxFeatures, MinSamples, Task, Tree, TreeParams};
 #[cfg(feature = "persist")]

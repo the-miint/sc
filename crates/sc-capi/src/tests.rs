@@ -555,6 +555,91 @@ fn regression_fit_predict_and_importances() {
 }
 
 #[test]
+fn model_feature_ids_round_trip_through_serialization() {
+    // The training vocabulary is what lets a caller encode a *different*
+    // dataset's features into this model's columns. sc only checks the feature
+    // count, so without it a caller re-deriving its own encoding gets silently
+    // wrong answers whenever two datasets differ by one feature each way.
+    let (ns, nf, r, c, v, labels) = separable();
+    unsafe {
+        let ctx = new_ctx();
+        let mut table = make_table(ns, nf, r, c, v);
+        let (fids, fids_s) = ffi_utf8(&["feat_b", "feat_a"]);
+        table.feature_ids = fids;
+        table.feature_ids_schema = fids_s;
+        let (t, ts) = ffi_utf8(&labels);
+        let params = base_params(7);
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+
+        let read_ids = |m: *const sc_model_t| {
+            let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
+            let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
+            assert_eq!(
+                sc_model_feature_ids(m, a.as_mut_ptr(), s.as_mut_ptr()),
+                SC_OK
+            );
+            let arr = StringArray::from(from_ffi(a.assume_init(), &s.assume_init()).unwrap());
+            (0..arr.len())
+                .map(|i| arr.value(i).to_string())
+                .collect::<Vec<_>>()
+        };
+
+        // Returned in the caller's column order, NOT sorted by sc: index i is
+        // whatever the caller put in column i.
+        let ids = read_ids(model);
+        assert_eq!(ids, vec!["feat_b".to_string(), "feat_a".to_string()]);
+        assert_eq!(ids.len(), nf as usize);
+
+        // The vocabulary must survive the BLOB round trip, since that is how a
+        // model reaches a later session.
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len: usize = 0;
+        assert_eq!(sc_model_serialize(model, &mut ptr, &mut len), SC_OK);
+        let mut restored: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(sc_model_deserialize(ctx, ptr, len, &mut restored), SC_OK);
+        assert_eq!(read_ids(restored), ids);
+
+        sc_buffer_free(ptr, len);
+        sc_model_free(restored);
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
+#[test]
+fn model_feature_ids_errors_when_absent() {
+    // make_table leaves feature_ids as the released/empty sentinel, so this
+    // model carries none. An explicit error beats an empty array a caller could
+    // mistake for "this model has no features".
+    let (ns, nf, r, c, v, labels) = separable();
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r, c, v);
+        let (t, ts) = ffi_utf8(&labels);
+        let params = base_params(7);
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+
+        let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
+        let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
+        assert_eq!(
+            sc_model_feature_ids(model, a.as_mut_ptr(), s.as_mut_ptr()),
+            SC_ERR_INVALID_INPUT
+        );
+
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
+#[test]
 fn tuning_and_rfe_flag_paths_produce_valid_models() {
     let (ns, nf, r, c, v, labels) = balanced8();
     for (tuning, rfe) in [(true, false), (false, true)] {
