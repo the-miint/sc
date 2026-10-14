@@ -11,7 +11,7 @@
 //! is byte-identical (`tests/determinism.rs`).
 
 use crate::data::{FeatureMatrix, Targets};
-use crate::exec::indexed_map;
+use crate::exec::try_indexed_map;
 use crate::rng::DetRng;
 use crate::tree::{grow, Task, Tree};
 use crate::{Error, Result};
@@ -26,13 +26,14 @@ impl RandomForest {
     /// Each tree `i` trains on its own bootstrap sample (drawn with replacement
     /// when `params.bootstrap`) and grows with per-node feature subsampling, both
     /// driven by a single [`DetRng`] seeded from `tree_seed(master_seed, i)`.
-    /// The build fans out over the [`indexed_map`] shim, so the result is
+    /// The build fans out over the [`try_indexed_map`] shim, so the result is
     /// identical regardless of thread count.
     ///
     /// Errors (`InvalidInput`): `x` and `y` disagree on sample count; the
     /// criterion does not match the task; [`RandomForestParams::validate`] or
-    /// [`RandomForestParams::resolve_n_bootstrap`] reject the parameters; or a
-    /// per-tree [`grow`] fails.
+    /// [`RandomForestParams::resolve_n_bootstrap`] reject the parameters;
+    /// `n_estimators` trees cannot even be allocated; or a per-tree [`grow`]
+    /// fails.
     pub fn fit(
         x: &FeatureMatrix,
         y: &Targets,
@@ -61,11 +62,18 @@ impl RandomForest {
         let n_features = x.n_features();
 
         // The closure is pure (captures only shared refs + Copy scalars), so it
-        // is Send+Sync and `indexed_map` returns trees in 0..n_estimators order
-        // regardless of the thread count.
-        let built: Vec<Result<Tree>> = indexed_map(params.n_estimators, |i| {
+        // is Send+Sync and `try_indexed_map` returns trees in 0..n_estimators
+        // order regardless of the thread count. Its fallible reservation turns
+        // an unallocatable `n_estimators` into this error instead of an abort.
+        let built: Vec<Result<Tree>> = try_indexed_map(params.n_estimators, |i| {
             build_tree(x, y, params, master_seed, i, n_boot)
-        });
+        })
+        .map_err(|e| {
+            Error::InvalidInput(format!(
+                "fit: n_estimators {} is too large to allocate ({e})",
+                params.n_estimators
+            ))
+        })?;
         let trees = built.into_iter().collect::<Result<Vec<Tree>>>()?;
         Ok(RandomForest::from_parts(trees, task, n_features, classes))
     }
@@ -214,5 +222,31 @@ mod tests {
         // max_samples count of zero must be a clean Err, not a panic inside grow.
         p.max_samples = MaxSamples::Count(0);
         assert!(RandomForest::fit(&x, &y, &p, 0).is_err());
+    }
+
+    /// `n_estimators` sizes the per-tree output buffer before any tree is grown.
+    /// Reserved infallibly, an unallocatable count reaches the alloc-error
+    /// handler, which aborts the process: no `Result`, and no `catch_unwind` at
+    /// the C API, can stop it (in duckdb-miint, `n_estimators := 4000000000000`
+    /// killed the host this way). It must be a clean `InvalidInput` instead.
+    #[test]
+    fn unallocatable_n_estimators_is_an_error_not_an_abort() {
+        let (x, y) = separable();
+        let mut p = RandomForestParams::classifier_defaults();
+        // The largest count whose byte size is still a valid layout, so the
+        // request reaches the allocator (whose failure is the abort) instead of
+        // tripping the capacity check; ~2^63 bytes on the 64-bit hosts these
+        // tests run on. Then a count whose byte size overflows outright, as any
+        // large count does on a 32-bit target such as wasm.
+        let at_allocator = isize::MAX as usize / std::mem::size_of::<Result<Tree>>();
+        for n in [at_allocator, usize::MAX] {
+            p.n_estimators = n;
+            match RandomForest::fit(&x, &y, &p, 0) {
+                Err(Error::InvalidInput(msg)) => {
+                    assert!(msg.contains("n_estimators"), "n_estimators={n}: {msg}")
+                }
+                other => panic!("n_estimators={n}: expected InvalidInput, got {other:?}"),
+            }
+        }
     }
 }

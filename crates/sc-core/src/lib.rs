@@ -38,7 +38,7 @@ pub mod tuning;
 
 pub use data::{FeatureMatrix, Targets};
 pub use error::{Error, Result};
-pub use exec::indexed_map;
+pub use exec::{indexed_map, try_indexed_map};
 pub use forest::{MaxSamples, RandomForest, RandomForestParams};
 pub use ncv::{ncv, ncv_with_folds, NcvParams, NcvResult, OofPredictions};
 pub use partition::{k_fold, stratified_k_fold, train_test_split, CvFolds, Split, TestSize};
