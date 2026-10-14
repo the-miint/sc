@@ -748,6 +748,31 @@ fn forced_error_battery() {
     }
 }
 
+/// duckdb-miint's `fit_classifier(..., n_estimators := 4000000000000)` aborted
+/// the host: the forest's ~928 TB per-tree buffer was reserved infallibly, and
+/// an allocation failure aborts rather than unwinds, so the panic barrier never
+/// saw it. An unallocatable `n_estimators` must be an ordinary invalid input.
+#[test]
+fn unallocatable_n_estimators_is_invalid_input() {
+    let (ns, nf, r, c, v, labels) = separable();
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r, c, v);
+        let (t, ts) = ffi_utf8(&labels);
+        let mut params = base_params(0);
+        params.n_estimators = 4_000_000_000_000;
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        let code = sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model);
+        assert_eq!(code, SC_ERR_INVALID_INPUT);
+        assert!(model.is_null());
+        let msg = std::ffi::CStr::from_ptr(sc_context_last_error(ctx))
+            .to_string_lossy()
+            .into_owned();
+        assert!(msg.contains("n_estimators"), "unexpected message: {msg}");
+        sc_context_free(ctx);
+    }
+}
+
 #[test]
 fn panic_barrier_maps_to_sc_err_panic() {
     // The public API guards every known sc-core panic site, so a panic can't be

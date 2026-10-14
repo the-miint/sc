@@ -2,7 +2,10 @@
 //!
 //! `indexed_map` returns an identically-ordered `Vec` regardless of the
 //! `parallel` feature, so results are invariant to thread count. This is the
-//! seam the forest's per-tree build uses in M4.
+//! seam the forest's per-tree build uses in M4 (through its fallible form,
+//! `try_indexed_map`).
+
+use std::collections::TryReserveError;
 
 /// Map `f` over `0..n`, collecting into an ordered `Vec`.
 ///
@@ -15,20 +18,43 @@
 /// bounds on the feature would let a `--no-default-features` build accept a
 /// non-`Send`/`Sync` closure that then fails once feature unification turns
 /// `parallel` back on elsewhere in the build graph.
+///
+/// Panics if the `n` outputs cannot be allocated; when `n` is caller input, use
+/// [`try_indexed_map`].
 pub fn indexed_map<R, F>(n: usize, f: F) -> Vec<R>
 where
     R: Send,
     F: Fn(usize) -> R + Send + Sync,
 {
+    try_indexed_map(n, f).expect("indexed_map: cannot allocate the output")
+}
+
+/// [`indexed_map`] with the output reserved fallibly: if `n` outputs cannot be
+/// allocated, this returns `Err` before `f` ever runs.
+///
+/// The output is sized by `n` up front, and an infallible reservation hands an
+/// unallocatable `n` to the global alloc-error handler, which aborts the
+/// process — no `Result`, and no `catch_unwind` at an FFI boundary, can contain
+/// that. Use this whenever `n` is caller input (the forest's `n_estimators`).
+/// The output's order and contents are exactly `indexed_map`'s.
+pub fn try_indexed_map<R, F>(n: usize, f: F) -> Result<Vec<R>, TryReserveError>
+where
+    R: Send,
+    F: Fn(usize) -> R + Send + Sync,
+{
+    let mut out = Vec::new();
+    out.try_reserve_exact(n)?;
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        (0..n).into_par_iter().map(f).collect()
+        // Fills `out` in place: rayon reserves only capacity it lacks, here none.
+        (0..n).into_par_iter().map(f).collect_into_vec(&mut out);
     }
     #[cfg(not(feature = "parallel"))]
     {
-        (0..n).map(f).collect()
+        out.extend((0..n).map(f));
     }
+    Ok(out)
 }
 
 /// Fill `buf` in consecutive `width`-sized chunks, calling `f(i, chunk)` for

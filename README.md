@@ -138,9 +138,10 @@ error codes with per-context last-error strings.
 Everything is wired through the [`Makefile`](Makefile):
 
 ```sh
-make            # fmt + clippy + tests (parallel & sequential) + wasm build + wasm parity + wasm audit + deny + C-API harness
+make            # fmt + clippy + tests (parallel & sequential) + wasm build + wasm parity + wasm audit + MSRV + deny + C-API harness
 make wasm-test  # determinism parity on wasm32-wasip1 (needs wasmtime)
 make wasm-audit # forbid native-only deps in the wasm tree
+make msrv       # C-API on the MSRV (Rust 1.86.0) for wasm32-unknown-emscripten, as duckdb-miint builds it
 make capi ctest leaks   # C-API harness + valgrind
 make dist       # versioned dist/sc-<version>.h
 make deny       # cargo-deny: licenses / advisories / bans / sources

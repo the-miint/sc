@@ -3,6 +3,7 @@ name = "sc-arrow"
 description = "Arrow C Data Interface marshaling between sc-core and native callers."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish = false

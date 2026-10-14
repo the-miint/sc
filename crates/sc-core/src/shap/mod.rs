@@ -7,8 +7,9 @@
 //! is "SHAP-ready". The algorithm is Lundberg et al. 2018 ("Consistent
 //! Individualized Feature Attribution for Tree Ensembles", arXiv:1802.03888,
 //! Algorithm 2 — cite this if you publish `tree_shap` results): the
-//! O(TLD²) EXTEND/UNWIND recursion over each tree's unique-feature decision path,
-//! with the reference distribution given by node cover
+//! O(TLD²) EXTEND/UNWIND recursion over each tree's unique-feature decision path
+//! (walked on an explicit heap stack, so tree depth is bounded by memory rather
+//! than by the thread's stack), with the reference distribution given by node cover
 //! (`feature_perturbation="tree_path_dependent"` in the Python `shap` library).
 //!
 //! **Forest = mean of trees.** `predict_proba` / `predict_values` are the
@@ -180,17 +181,7 @@ impl RandomForest {
             // Accumulate per-tree phi (feature-major: phi[f * n_outputs + o]).
             let mut phi = vec![0.0f64; n_features * n_outputs];
             for t in 0..self.n_trees() {
-                tree_shap_recurse(
-                    self.tree(t),
-                    &scratch,
-                    &mut phi,
-                    n_outputs,
-                    0,
-                    Vec::new(),
-                    1.0,
-                    1.0,
-                    ROOT_SENTINEL,
-                );
+                tree_shap_walk(self.tree(t), &scratch, &mut phi, n_outputs);
             }
             // Transpose into this sample's output-major row, scaled by 1/n_trees.
             for f in 0..n_features {
@@ -303,90 +294,107 @@ fn unwound_path_sum(path: &[PathElement], path_index: usize) -> f64 {
     total
 }
 
-/// TreeSHAP recursion for one tree + one sample (Algorithm 2). Accumulates each
-/// feature's Shapley contribution into `phi` (feature-major:
-/// `phi[feature * n_outputs + output]`). `path` is the parent's decision path
-/// (owned per call so sibling recursions don't alias); `zero_fraction`,
-/// `one_fraction`, and `feature_index` describe the edge just taken.
-#[allow(clippy::too_many_arguments)]
-fn tree_shap_recurse(
-    tree: &Tree,
-    x: &[f64],
-    phi: &mut [f64],
-    n_outputs: usize,
+/// One pending step of [`tree_shap_walk`]: enter `node` by an edge that extends
+/// `path` (the parent's decision path, owned so siblings don't alias) with
+/// `zero_fraction`/`one_fraction` for `feature_index`. These are exactly the
+/// arguments of one call of Algorithm 2's recursion.
+struct Visit {
     node: usize,
-    mut path: Vec<PathElement>,
+    path: Vec<PathElement>,
     zero_fraction: f64,
     one_fraction: f64,
     feature_index: i32,
-) {
-    extend_path(&mut path, zero_fraction, one_fraction, feature_index);
+}
 
-    if tree.is_leaf(node) {
-        let leaf_value = tree.value(node);
-        // Skip index 0 (the root sentinel, feature `-1`).
-        for (i, el) in path.iter().enumerate().skip(1) {
-            let w = unwound_path_sum(&path, i);
-            let scale = w * (el.one_fraction - el.zero_fraction);
-            let f = el.feature_index as usize;
-            for o in 0..n_outputs {
-                phi[f * n_outputs + o] += scale * leaf_value[o];
+/// TreeSHAP for one tree + one sample (Algorithm 2). Accumulates each feature's
+/// Shapley contribution into `phi` (feature-major: `phi[feature * n_outputs +
+/// output]`).
+///
+/// Algorithm 2 is a recursion one call deep per tree level, but nothing bounds a
+/// grown tree's depth except its sample count (`grow` uses an explicit stack),
+/// and a stack overflow aborts the process. So this walks the tree with a heap
+/// stack of [`Visit`]s instead, each owning the path state a recursive frame
+/// held. Pushing the cold child before the hot one finishes the hot subtree
+/// first, as the recursion does: leaves are reached, and `phi` accumulated, in
+/// the same order from the same operands, so the result is bit-identical.
+fn tree_shap_walk(tree: &Tree, x: &[f64], phi: &mut [f64], n_outputs: usize) {
+    let mut stack = vec![Visit {
+        node: 0,
+        path: Vec::new(),
+        zero_fraction: 1.0,
+        one_fraction: 1.0,
+        feature_index: ROOT_SENTINEL,
+    }];
+    while let Some(Visit {
+        node,
+        mut path,
+        zero_fraction,
+        one_fraction,
+        feature_index,
+    }) = stack.pop()
+    {
+        extend_path(&mut path, zero_fraction, one_fraction, feature_index);
+
+        if tree.is_leaf(node) {
+            let leaf_value = tree.value(node);
+            // Skip index 0 (the root sentinel, feature `-1`).
+            for (i, el) in path.iter().enumerate().skip(1) {
+                let w = unwound_path_sum(&path, i);
+                let scale = w * (el.one_fraction - el.zero_fraction);
+                let f = el.feature_index as usize;
+                for o in 0..n_outputs {
+                    phi[f * n_outputs + o] += scale * leaf_value[o];
+                }
             }
+            continue;
         }
-        return;
+
+        // Internal node: pick the hot (observed) child vs the cold one, and
+        // weight both by cover fraction — the path-dependent reference
+        // distribution.
+        let split = tree.feature(node) as usize;
+        let node_cover = tree.weighted_n_node_samples(node);
+        let (hot, cold) = if tree.goes_left(node, x[split]) {
+            (
+                tree.children_left(node) as usize,
+                tree.children_right(node) as usize,
+            )
+        } else {
+            (
+                tree.children_right(node) as usize,
+                tree.children_left(node) as usize,
+            )
+        };
+        let hot_zero = tree.weighted_n_node_samples(hot) / node_cover;
+        let cold_zero = tree.weighted_n_node_samples(cold) / node_cover;
+
+        // If an ancestor already split on this feature, unwind that extension so
+        // it can be re-applied for this (tighter) split.
+        let mut incoming_zero = 1.0;
+        let mut incoming_one = 1.0;
+        let split_i32 = split as i32;
+        if let Some(pi) = path.iter().position(|e| e.feature_index == split_i32) {
+            incoming_zero = path[pi].zero_fraction;
+            incoming_one = path[pi].one_fraction;
+            unwind_path(&mut path, pi);
+        }
+
+        let hot_path = path.clone();
+        stack.push(Visit {
+            node: cold,
+            path,
+            zero_fraction: incoming_zero * cold_zero,
+            one_fraction: 0.0,
+            feature_index: split_i32,
+        });
+        stack.push(Visit {
+            node: hot,
+            path: hot_path,
+            zero_fraction: incoming_zero * hot_zero,
+            one_fraction: incoming_one,
+            feature_index: split_i32,
+        });
     }
-
-    // Internal node: pick the hot (observed) child vs the cold one, and weight
-    // both by cover fraction — the path-dependent reference distribution.
-    let split = tree.feature(node) as usize;
-    let node_cover = tree.weighted_n_node_samples(node);
-    let (hot, cold) = if tree.goes_left(node, x[split]) {
-        (
-            tree.children_left(node) as usize,
-            tree.children_right(node) as usize,
-        )
-    } else {
-        (
-            tree.children_right(node) as usize,
-            tree.children_left(node) as usize,
-        )
-    };
-    let hot_zero = tree.weighted_n_node_samples(hot) / node_cover;
-    let cold_zero = tree.weighted_n_node_samples(cold) / node_cover;
-
-    // If an ancestor already split on this feature, unwind that extension so it
-    // can be re-applied for this (tighter) split.
-    let mut incoming_zero = 1.0;
-    let mut incoming_one = 1.0;
-    let split_i32 = split as i32;
-    if let Some(pi) = path.iter().position(|e| e.feature_index == split_i32) {
-        incoming_zero = path[pi].zero_fraction;
-        incoming_one = path[pi].one_fraction;
-        unwind_path(&mut path, pi);
-    }
-
-    tree_shap_recurse(
-        tree,
-        x,
-        phi,
-        n_outputs,
-        hot,
-        path.clone(),
-        incoming_zero * hot_zero,
-        incoming_one,
-        split_i32,
-    );
-    tree_shap_recurse(
-        tree,
-        x,
-        phi,
-        n_outputs,
-        cold,
-        path,
-        incoming_zero * cold_zero,
-        0.0,
-        split_i32,
-    );
 }
 
 #[cfg(test)]
@@ -699,6 +707,104 @@ mod tests {
         let f = cls_forest(); // expects 3 features
         let x = matrix(&[&[1.0, 2.0]]);
         assert!(f.tree_shap(&x).is_err());
+    }
+
+    // --- deep trees ----------------------------------------------------------
+
+    /// A 2-class "caterpillar" tree `depth` splits deep on feature 0: the shape
+    /// `grow` legally builds when every best split peels one sample off the end
+    /// (labels alternating along a single feature, bootstrap off,
+    /// max_features=all). Internal node `k` (id `2k`) holds the samples with
+    /// values `k..=depth` and splits at `k + 0.5`; its left child (id `2k + 1`)
+    /// is a one-sample leaf, its right child (id `2k + 2`) the next split or,
+    /// under the last one, the final leaf. Labels alternate with the value, and
+    /// internal `value`s are class proportions (the cover-weighted leaf mean),
+    /// as sklearn stores them.
+    fn chain_tree(depth: usize) -> Tree {
+        let n_nodes = 2 * depth + 1;
+        let class = |v: usize| v % 2;
+        let mut left = vec![-1i64; n_nodes];
+        let mut right = vec![-1i64; n_nodes];
+        let mut feature = vec![-2i64; n_nodes];
+        let mut threshold = vec![-2.0f64; n_nodes];
+        let mut value = vec![0.0f64; 2 * n_nodes];
+        let mut impurity = vec![0.0f64; n_nodes];
+        let mut count = vec![1i64; n_nodes];
+        value[2 * (2 * depth) + class(depth)] = 1.0; // the final leaf
+        let mut n_class1 = class(depth); // among values k..=depth, built bottom-up
+        for k in (0..depth).rev() {
+            let (node, leaf) = (2 * k, 2 * k + 1);
+            value[2 * leaf + class(k)] = 1.0;
+            n_class1 += class(k);
+            let n = depth + 1 - k;
+            let (p0, p1) = ((n - n_class1) as f64 / n as f64, n_class1 as f64 / n as f64);
+            left[node] = leaf as i64;
+            right[node] = (node + 2) as i64;
+            feature[node] = 0;
+            threshold[node] = k as f64 + 0.5;
+            value[2 * node] = p0;
+            value[2 * node + 1] = p1;
+            impurity[node] = 2.0 * p0 * p1;
+            count[node] = n as i64;
+        }
+        let cover: Vec<f64> = count.iter().map(|&c| c as f64).collect();
+        Tree::from_sklearn(
+            Task::Classification { n_classes: 2 },
+            &left,
+            &right,
+            &feature,
+            &threshold,
+            &value,
+            &impurity,
+            &count,
+            &cover,
+            1,
+        )
+        .unwrap()
+    }
+
+    /// Nothing bounds a grown tree's depth but its sample count, so TreeSHAP
+    /// must not spend thread stack per tree level: a stack overflow aborts the
+    /// whole process, and no `Result` or `catch_unwind` can stop it (in
+    /// duckdb-miint a ~20,000-deep chain killed the host on a rayon worker). Run
+    /// on a deliberately small stack, where a per-level recursion overflows
+    /// deterministically, and require the deep result to stay exact.
+    #[test]
+    fn deep_tree_does_not_overflow_the_stack() {
+        const DEPTH: usize = 50_000;
+        // Room for a few thousand recursive frames, far fewer than DEPTH.
+        const STACK: usize = 256 * 1024;
+        let forest =
+            RandomForest::from_trees(vec![chain_tree(DEPTH)], Some(vec!["a".into(), "b".into()]))
+                .unwrap();
+        // 0 stops at the first split (its cold sibling is the whole chain);
+        // DEPTH / 2 + 1 stops halfway, in the other class; DEPTH reaches the
+        // deepest leaf.
+        let x = matrix(&[&[0.0], &[(DEPTH / 2 + 1) as f64], &[DEPTH as f64]]);
+        // A one-thread rayon pool rather than a bare thread: with `parallel` on,
+        // `fill_chunks` would otherwise move the work onto the global pool's
+        // default-sized stacks.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .stack_size(STACK)
+            .build()
+            .unwrap();
+        let shap = pool.install(|| forest.tree_shap(&x)).unwrap();
+
+        // With a single feature, additivity pins the attribution completely:
+        // the feature receives all of prediction - E[f].
+        let proba = forest.predict_proba(&x).unwrap();
+        assert_eq!(proba[1], vec![0.0, 1.0], "middle sample is class b");
+        for s in 0..x.n_samples() {
+            for o in 0..2 {
+                let recon = shap.base_values[o] + shap.values[s][o][0];
+                assert!(
+                    (recon - proba[s][o]).abs() <= 1e-12,
+                    "additivity[{s}][{o}]: {recon} vs {}",
+                    proba[s][o]
+                );
+            }
+        }
     }
 
     /// Dense feature row for sample `s` (for feeding the brute-force reference).
