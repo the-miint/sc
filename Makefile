@@ -19,9 +19,14 @@ VALGRIND_SUPP := crates/sc-capi/ctest/valgrind.supp
 HARNESS_CFLAGS := -std=c11 -Wall -Iinclude
 HARNESS_LDLIBS := -l:libsc_capi.a -lpthread -ldl -lm
 
-.PHONY: all fmt lint test test-seq wasm wasm-test wasm-audit deny capi ctest leaks dist clean regen-fixtures
+# The Cargo.toml `rust-version` floor and the target duckdb-miint builds the
+# C-API for (see `msrv`).
+MSRV := 1.86.0
+MSRV_TARGET := wasm32-unknown-emscripten
 
-all: fmt lint test test-seq wasm wasm-test wasm-audit deny capi ctest
+.PHONY: all fmt lint test test-seq wasm wasm-test wasm-audit msrv deny capi ctest leaks dist clean regen-fixtures
+
+all: fmt lint test test-seq wasm wasm-test wasm-audit msrv deny capi ctest
 
 fmt:
 	$(CARGO) fmt --all --check
@@ -59,6 +64,15 @@ wasm-test:
 # the shipped wasm32-unknown-unknown tree.
 wasm-audit:
 	./ci/wasm-audit.sh
+
+# Compile the C-API exactly as duckdb-miint's wasm build does: Rust $(MSRV) for
+# $(MSRV_TARGET). clippy's `incompatible_msrv` (armed by `rust-version`) only
+# catches std APIs newer than the floor; this also catches newer language
+# features, a dependency bump that raises its own MSRV, and target-specific code.
+# `check` links nothing, so no emsdk is needed. Requires
+# `rustup toolchain install $(MSRV) --target $(MSRV_TARGET)`.
+msrv:
+	$(CARGO) +$(MSRV) check -p sc-capi --target $(MSRV_TARGET)
 
 deny:
 	$(CARGO) deny check

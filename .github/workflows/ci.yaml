@@ -66,6 +66,21 @@ jobs:
       - name: determinism parity (wasm32-wasip1 under wasmtime)
         run: make wasm-test
 
+  # The declared MSRV on the target duckdb-miint ships the C-API to: Rust 1.86.0
+  # for wasm32-unknown-emscripten (keep in sync with `rust-version` in
+  # Cargo.toml and `MSRV` in the Makefile).
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.86.0
+          targets: wasm32-unknown-emscripten
+      - uses: Swatinem/rust-cache@v2
+      - name: check C-API (Rust 1.86.0, wasm32-unknown-emscripten)
+        run: make msrv
+
   deny:
     runs-on: ubuntu-latest
     steps:

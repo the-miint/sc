@@ -8,9 +8,7 @@ authors.workspace = true
 readme = "README.md"
 keywords = ["random-forest", "machine-learning", "classification", "shap", "wasm"]
 categories = ["science", "algorithms", "wasm"]
-# Minimum supported Rust version (informational). Chosen as a recent stable; the
-# project is built/tested on current stable and does not gate on this in CI.
-rust-version = "1.85"
+rust-version.workspace = true
 # Internal v1: descriptive metadata, but not published to crates.io.
 publish = false
 

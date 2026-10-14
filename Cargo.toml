@@ -7,6 +7,14 @@ version = "1.0.0"
 edition = "2021"
 license = "BSD-3-Clause"
 authors = ["Daniel McDonald <d3mcdonald@health.ucsd.edu>"]
+# Minimum supported Rust version, inherited by every crate. A hard floor, not a
+# guess: duckdb-miint builds sc-capi for wasm32-unknown-emscripten with Rust
+# pinned to 1.86.0 (for its emsdk 3.1.71 / binaryen). Declaring it makes
+# clippy's `incompatible_msrv` reject std APIs stabilized later (and stops
+# `manual_is_multiple_of` from steering code onto 1.87's `is_multiple_of`); the
+# CI `msrv` job (`make msrv`) compiles the C-API with exactly that toolchain and
+# target.
+rust-version = "1.86"
 
 # Arrow C Data Interface, pinned once here so sc-arrow and sc-capi never drift
 # apart (an ABI mismatch between the two would be a memory-safety bug, not a

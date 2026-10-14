@@ -154,7 +154,7 @@ unsafe fn borrow_primitive<'a, T: Copy>(
     if p.is_null() {
         return Err(MarshalError::arrow(format!("{name}: null data buffer")));
     }
-    if !(p as usize).is_multiple_of(std::mem::align_of::<T>()) {
+    if (p as usize) % std::mem::align_of::<T>() != 0 {
         return Err(MarshalError::arrow(format!(
             "{name}: data buffer is not {}-byte aligned",
             std::mem::align_of::<T>()
@@ -210,7 +210,7 @@ unsafe fn borrow_utf8(
     if off_p.is_null() {
         return Err(MarshalError::arrow(format!("{name}: null offsets buffer")));
     }
-    if !(off_p as usize).is_multiple_of(std::mem::align_of::<i32>()) {
+    if (off_p as usize) % std::mem::align_of::<i32>() != 0 {
         return Err(MarshalError::arrow(format!(
             "{name}: offsets buffer is not 4-byte aligned"
         )));
@@ -411,7 +411,7 @@ pub unsafe fn export_fixed_size_list_flat(
     if width == 0 {
         return Err(MarshalError::arrow("fixed_size_list: width must be >= 1"));
     }
-    if !values.len().is_multiple_of(width) {
+    if values.len() % width != 0 {
         return Err(MarshalError::arrow(format!(
             "fixed_size_list: {} values is not a whole number of rows of width {width}",
             values.len()
