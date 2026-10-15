@@ -329,6 +329,15 @@ static void forced_error(sc_context_t *ctx) {
     assert(msg != NULL && "expected a last-error message");
     printf("  forced error: status=%d msg=\"%s\"\n", st, msg);
 
+    /* A call without a context records its error on the calling thread. */
+    struct ArrowArray fi;
+    struct ArrowSchema fi_schema;
+    st = sc_feature_importances(NULL, &fi, &fi_schema);
+    assert(st == SC_ERR_NULL_POINTER);
+    msg = sc_thread_last_error();
+    assert(msg != NULL && strcmp(msg, "null pointer: model") == 0);
+    printf("  contextless error: status=%d msg=\"%s\"\n", st, msg);
+
     free_table(&table);
     release_arr(&targets);
     release_sch(&targets_schema);

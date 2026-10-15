@@ -83,7 +83,8 @@ impl std::error::Error for MarshalError {}
 /// least `n_buffers` pointers). The returned pointer is only read here — the
 /// caller must keep `a` alive for as long as it is used.
 unsafe fn buffer_ptr(a: &FFI_ArrowArray, index: usize) -> Result<*const u8, MarshalError> {
-    if a.buffers.is_null() || (a.n_buffers as usize) <= index {
+    // `try_from`, not `as`: a negative count would read as a huge one and pass.
+    if a.buffers.is_null() || !usize::try_from(a.n_buffers).is_ok_and(|n| n > index) {
         return Err(MarshalError::arrow(format!(
             "array has {} buffers; need at least {}",
             a.n_buffers,
@@ -96,6 +97,18 @@ unsafe fn buffer_ptr(a: &FFI_ArrowArray, index: usize) -> Result<*const u8, Mars
     Ok(std::ptr::read_unaligned(
         (a.buffers as *const *const u8).add(index),
     ))
+}
+
+/// `a.length` as a `usize`, once it is known to be non-negative. `as` would wrap
+/// a length past `usize::MAX` (reachable on a 32-bit target such as wasm32) to a
+/// short one, and the import would read a prefix of the array without error.
+fn length(a: &FFI_ArrowArray, name: &str) -> Result<usize, MarshalError> {
+    usize::try_from(a.length).map_err(|_| {
+        MarshalError::arrow(format!(
+            "{name}: length {} does not fit in this target's usize",
+            a.length
+        ))
+    })
 }
 
 /// Reject a primitive array that is not the dense, unsliced, non-null layout we
@@ -145,7 +158,7 @@ unsafe fn borrow_primitive<'a, T: Copy>(
     name: &str,
 ) -> Result<&'a [T], MarshalError> {
     check_primitive(a, s, fmt, name)?;
-    let n = a.length as usize;
+    let n = length(a, name)?;
     if n == 0 {
         return Ok(&[]);
     }
@@ -201,7 +214,7 @@ unsafe fn borrow_utf8(
             a.length
         )));
     }
-    let n = a.length as usize;
+    let n = length(a, name)?;
     if n == 0 {
         return Ok(Vec::new());
     }
@@ -262,9 +275,9 @@ pub unsafe fn import_coo(
     vals_s: &FFI_ArrowSchema,
 ) -> Result<FeatureMatrix, MarshalError> {
     let ns = usize::try_from(n_samples)
-        .map_err(|_| MarshalError::arrow(format!("negative n_samples {n_samples}")))?;
+        .map_err(|_| MarshalError::arrow(format!("n_samples {n_samples} out of range")))?;
     let nf = usize::try_from(n_features)
-        .map_err(|_| MarshalError::arrow(format!("negative n_features {n_features}")))?;
+        .map_err(|_| MarshalError::arrow(format!("n_features {n_features} out of range")))?;
     let r: &[i64] = borrow_primitive(rows, rows_s, FMT_INT64, "rows")?;
     let c: &[i64] = borrow_primitive(cols, cols_s, FMT_INT64, "cols")?;
     let v: &[f64] = borrow_primitive(vals, vals_s, FMT_FLOAT64, "vals")?;
@@ -488,6 +501,23 @@ mod tests {
         let (vals2, vs2) = to_ffi_pair(Float64Array::from(vec![1.0, 2.0]));
         let err = unsafe { import_coo(4, 1, &rows, &rs, &cols2, &cs2, &vals2, &vs2).unwrap_err() };
         assert!(matches!(err, MarshalError::Arrow(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn rejects_counts_that_do_not_fit_usize() {
+        // `n_buffers as usize` read -1 as usize::MAX, so the "too few buffers"
+        // guard passed an array claiming a negative count. On wasm32 a length or
+        // count past u32::MAX wrapped to a small number the same way. Both checks
+        // fire before any buffer is read.
+        let (mut rows, rs) = to_ffi_pair(Int64Array::from(vec![0i64, 1]));
+        rows.n_buffers = -1;
+        let (cols, cs) = to_ffi_pair(Int64Array::from(vec![0i64, 0]));
+        let (vals, vs) = to_ffi_pair(Float64Array::from(vec![1.0, 2.0]));
+        let err = unsafe { import_coo(2, 1, &rows, &rs, &cols, &cs, &vals, &vs).unwrap_err() };
+        assert!(
+            matches!(&err, MarshalError::Arrow(m) if m.contains("buffers")),
+            "got {err:?}"
+        );
     }
 
     #[test]

@@ -32,8 +32,9 @@ impl RandomForest {
     /// Errors (`InvalidInput`): `x` and `y` disagree on sample count; the
     /// criterion does not match the task; [`RandomForestParams::validate`] or
     /// [`RandomForestParams::resolve_n_bootstrap`] reject the parameters;
-    /// `n_estimators` trees cannot even be allocated; or a per-tree [`grow`]
-    /// fails.
+    /// `n_estimators` trees cannot even be allocated; a per-tree [`grow`]
+    /// fails; or a grown tree holds a value the loader would reject (see
+    /// [`check_loadable`]).
     pub fn fit(
         x: &FeatureMatrix,
         y: &Targets,
@@ -92,7 +93,7 @@ fn build_tree(
 ) -> Result<Tree> {
     let n = x.n_samples();
     let mut rng = DetRng::for_tree(master_seed, i as u64);
-    if params.bootstrap {
+    let tree = if params.bootstrap {
         // Draw n_boot row indices with replacement, then grow on that resample.
         // The same rng subsequently drives grow's per-node feature subsampling.
         let sample: Vec<usize> = (0..n_boot)
@@ -100,11 +101,44 @@ fn build_tree(
             .collect();
         let xb = x.select_rows(&sample);
         let yb = y.select(&sample);
-        grow(&xb, &yb, &params.tree, &mut rng)
+        grow(&xb, &yb, &params.tree, &mut rng)?
     } else {
         // No resampling: grow on all rows in order (no RNG consumed for sampling).
-        grow(x, y, &params.tree, &mut rng)
+        grow(x, y, &params.tree, &mut rng)?
+    };
+    check_loadable(&tree, i)?;
+    Ok(tree)
+}
+
+/// Refuse a grown tree the loader ([`Tree::from_sklearn`]) would reject, so fit
+/// never stores a model that cannot be read back. The loader requires every
+/// node value, impurity and threshold to be finite. Finite data still overflows
+/// them: a regression node's mean or variance once the targets pass about 1e154
+/// in magnitude, and a split threshold on a feature at or below `-f32::MAX`,
+/// since the splitter compares features in float32 (as sklearn does).
+fn check_loadable(tree: &Tree, i: usize) -> Result<()> {
+    for node in 0..tree.n_nodes() {
+        // Only a regression node's mean or variance can overflow.
+        let stat = match tree.value(node).iter().find(|v| !v.is_finite()) {
+            Some(&v) => Some(("value", v)),
+            None => Some(("impurity", tree.impurity(node))).filter(|(_, v)| !v.is_finite()),
+        };
+        if let Some((what, v)) = stat {
+            return Err(Error::InvalidInput(format!(
+                "fit: tree {i} node {node} {what} is {v}: the targets are too large in \
+                 magnitude for f64 node statistics; rescale them"
+            )));
+        }
+        let threshold = tree.threshold(node);
+        if !threshold.is_finite() {
+            return Err(Error::InvalidInput(format!(
+                "fit: tree {i} node {node} split threshold is {threshold}: a feature value lies \
+                 beyond the float32 range (±{:e}) the splitter compares in; rescale the features",
+                f32::MAX
+            )));
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -187,6 +221,37 @@ mod tests {
                 "prediction {v} out of target range"
             );
         }
+    }
+
+    /// Finite data whose node statistics or thresholds overflow is refused with
+    /// a message naming the cause, rather than fit into a model the loader
+    /// rejects (tests/persist.rs checks the round trip).
+    #[test]
+    fn fit_refuses_data_whose_tree_would_not_load() {
+        let x = dense(&[&[0.0], &[1.0], &[2.0], &[3.0]]);
+        let mut rp = RandomForestParams::regressor_defaults();
+        rp.n_estimators = 4;
+        for y in [
+            [1.7e308, 1.7e308, -1.7e308, -1.7e308], // the mean overflows
+            [1e200, 2e200, -1e200, 3e200],          // the variance overflows
+        ] {
+            let y = Targets::numeric(&y).unwrap();
+            let err = RandomForest::fit(&x, &y, &rp, 7).unwrap_err();
+            assert!(
+                matches!(&err, Error::InvalidInput(m) if m.contains("targets are too large")),
+                "got {err:?}"
+            );
+        }
+
+        let x = dense(&[&[-1e39], &[-1e39], &[1.0], &[1.0]]);
+        let y = Targets::categorical(&["a", "a", "b", "b"]).unwrap();
+        let mut cp = RandomForestParams::classifier_defaults();
+        cp.n_estimators = 4;
+        let err = RandomForest::fit(&x, &y, &cp, 7).unwrap_err();
+        assert!(
+            matches!(&err, Error::InvalidInput(m) if m.contains("float32 range")),
+            "got {err:?}"
+        );
     }
 
     #[test]

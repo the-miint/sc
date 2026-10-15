@@ -304,15 +304,22 @@ impl From<sc_arrow::MarshalError> for ApiError {
     }
 }
 
-/// Record `message` as the context's last error (if `ctx` is non-null). NUL
-/// bytes are stripped so `CString::new` cannot fail.
+thread_local! {
+    /// The last error of a call on this thread that had no context to record it
+    /// on; read through [`sc_thread_last_error`].
+    static THREAD_LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
+
+/// Record `message` as the context's last error, or, when `ctx` is null, as the
+/// calling thread's. NUL bytes are stripped so `CString::new` cannot fail.
 fn record_error(ctx: *const sc_context_t, message: &str) {
+    let sanitized = message.replace('\0', " ");
+    let cstr = CString::new(sanitized).unwrap_or_else(|_| CString::new("error").unwrap());
     if ctx.is_null() {
+        THREAD_LAST_ERROR.with(|e| *e.borrow_mut() = Some(cstr));
         return;
     }
     let ctx = unsafe { &*ctx };
-    let sanitized = message.replace('\0', " ");
-    let cstr = CString::new(sanitized).unwrap_or_else(|_| CString::new("error").unwrap());
     *ctx.last_error.borrow_mut() = Some(cstr);
 }
 
@@ -485,6 +492,24 @@ pub unsafe extern "C" fn sc_context_last_error(ctx: *const sc_context_t) -> *con
             Some(s) => s.as_ptr(),
             None => std::ptr::null(),
         }
+    })
+}
+
+/// The error text of the last failed call on the calling thread that had no
+/// context to record it on: [`sc_context_new`], [`sc_model_feature_ids`],
+/// [`sc_feature_importances`], [`sc_model_serialize`], or any call passed a NULL
+/// `ctx`. NULL if there has been none. Errors from calls given a context go to
+/// [`sc_context_last_error`] only.
+///
+/// The pointer is valid until the next such failure on this thread, or until the
+/// thread exits. Do not free it.
+#[no_mangle]
+pub extern "C" fn sc_thread_last_error() -> *const c_char {
+    guard_cstr(|| {
+        THREAD_LAST_ERROR.with(|e| match &*e.borrow() {
+            Some(s) => s.as_ptr(),
+            None => std::ptr::null(),
+        })
     })
 }
 
