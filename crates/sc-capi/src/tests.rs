@@ -857,6 +857,53 @@ fn unallocatable_n_estimators_is_invalid_input() {
     }
 }
 
+/// On wasm32 a count past `u32::MAX` saturates to `usize::MAX` (see
+/// `convert::count`). On a 64-bit target `u64::MAX` reaches sc-core as the same
+/// `usize::MAX`, so this checks what sc-core does with the saturated values:
+/// leaf and split minimums no sample count can meet grow a single-leaf tree, and
+/// an unbounded depth is unbounded, with no overflow on the way.
+#[test]
+fn saturated_counts_fit_a_stump() {
+    let (ns, nf, r, c, v, labels) = separable();
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r.clone(), c.clone(), v.clone());
+        let (t, ts) = ffi_utf8(&labels);
+        let mut params = base_params(3);
+        params.min_samples_leaf.count = u64::MAX;
+        params.min_samples_split.count = u64::MAX;
+        params.max_depth = i64::MAX;
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+        // A stump predicts one class for every sample.
+        let ptable = make_table(ns, nf, r, c, v);
+        let mut pa = MaybeUninit::<FFI_ArrowArray>::uninit();
+        let mut ps = MaybeUninit::<FFI_ArrowSchema>::uninit();
+        assert_eq!(
+            sc_predict(ctx, model, &ptable, pa.as_mut_ptr(), ps.as_mut_ptr()),
+            SC_OK
+        );
+        let got = read_utf8(pa.assume_init(), ps.assume_init());
+        assert!(got.iter().all(|l| *l == got[0]), "not a stump: {got:?}");
+
+        // A bootstrap size past n is rejected, as it is for any count > n.
+        params.max_samples.kind = sc_max_samples_kind_t::SC_MAX_SAMPLES_COUNT;
+        params.max_samples.count = u64::MAX;
+        let mut m2: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut m2),
+            SC_ERR_INVALID_INPUT
+        );
+        assert!(m2.is_null());
+
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
 #[test]
 fn panic_barrier_maps_to_sc_err_panic() {
     // The public API guards every known sc-core panic site, so a panic can't be
