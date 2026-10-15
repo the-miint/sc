@@ -20,7 +20,7 @@ arrow-schema = { workspace = true }
 rayon = "1"
 
 [build-dependencies]
-# Build-time only: regenerates include/sc.h every build so the header can't
+# Build-time only: regenerates sc.h every build so the header can't
 # drift. MPL-2.0 (a build tool, never linked/shipped) is scoped in deny.toml.
 cbindgen = { version = "0.29", default-features = false }
 

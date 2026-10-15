@@ -77,9 +77,10 @@ msrv:
 deny:
 	$(CARGO) deny check
 
-# Build the C-API staticlib/cdylib; build.rs regenerates include/sc.h.
+# Build the C-API staticlib/cdylib and regenerate include/sc.h (build.rs writes
+# the header where SC_HEADER_DIR points; see crates/sc-capi/build.rs).
 capi:
-	$(CARGO) build -p sc-capi
+	SC_HEADER_DIR=$(CURDIR)/include $(CARGO) build -p sc-capi
 
 # Compile the C harness against the staticlib and run it (ABI / link proof).
 $(HARNESS): capi $(HARNESS_SRC)
