@@ -65,9 +65,11 @@ impl Tree {
     ///
     /// Errors (`InvalidInput`): unequal per-node lengths; `value.len() !=
     /// n_nodes * stride`; a zero-node tree; a feature index outside
-    /// `[0, n_features)`; a leaf/internal sentinel inconsistency; or a child
+    /// `[0, n_features)`; a leaf/internal sentinel inconsistency; a child
     /// index that is out of range or not strictly greater than its parent
-    /// (which would imply a cycle or non-DFS ordering).
+    /// (which would imply a cycle or non-DFS ordering); or an internal node
+    /// whose cover is not its children's covers summed (within
+    /// [`COVER_RTOL`]).
     #[allow(clippy::too_many_arguments)]
     pub fn from_sklearn(
         task: Task,
@@ -196,6 +198,20 @@ impl Tree {
                     return Err(Error::InvalidInput(format!(
                         "from_sklearn: internal node {i} weighted_n_node_samples {} must be > 0",
                         weighted_n_node_samples[i]
+                    )));
+                }
+                // Each child's hot/cold fraction is its cover over this one, so
+                // the two must add up to it, or finite covers give non-finite
+                // attributions (a child of 1e300 under a parent of 1e-300).
+                let (wp, wl, wr) = (
+                    weighted_n_node_samples[i],
+                    weighted_n_node_samples[l as usize],
+                    weighted_n_node_samples[r as usize],
+                );
+                if (wl + wr - wp).abs() > COVER_RTOL * wp {
+                    return Err(Error::InvalidInput(format!(
+                        "from_sklearn: internal node {i} cover {wp} is not its children's \
+                         covers summed ({wl} + {wr})"
                     )));
                 }
             }
@@ -508,6 +524,16 @@ impl Tree {
     }
 }
 
+/// How far, relative to a parent's cover, its children's covers may sum from it.
+/// sklearn sums the same sample weights for a node and for each child, so only
+/// float rounding separates them: nothing with integer weights (sc's own
+/// bootstrap counts, every oracle fixture), and at most 1.1e-12 measured with
+/// fractional ones (sklearn 1.4.2 forests on 200,000 samples with
+/// `class_weight="balanced"`, `"balanced_subsample"`, or a `sample_weight`). The
+/// error grows about linearly with n, so 1e-6 leaves room for far larger data
+/// and still rejects covers that do not describe the same samples.
+const COVER_RTOL: f64 = 1e-6;
+
 /// Error (`InvalidInput`) if any entry of `xs` fails `ok`, naming `what` and the
 /// offending index/value — the shared shape-agnostic check for `from_sklearn`'s
 /// float arrays.
@@ -743,6 +769,43 @@ mod tests {
             .is_err(),
             "zero-cover internal node"
         );
+    }
+
+    /// TreeSHAP weights each child by its cover over its parent's, so covers that
+    /// do not add up drive finite inputs to inf/NaN attributions: a one-split
+    /// model with root cover 1e-300 and a left child of 1e300 explained a sample
+    /// with a NaN SHAP value. A parent's cover must equal its children's sum, up
+    /// to float rounding in sklearn's weighted sums.
+    #[test]
+    fn from_sklearn_rejects_inconsistent_covers() {
+        let stump = |weighted: &[f64]| {
+            Tree::from_sklearn(
+                Task::Regression,
+                &[1, -1, -1],
+                &[2, -1, -1],
+                &[0, -2, -2],
+                &[0.5, -2.0, -2.0],
+                &[1.0, 0.0, 2.0],
+                &[1.0, 0.0, 0.0],
+                &[2, 1, 1],
+                weighted,
+                1,
+            )
+        };
+        for (weighted, what) in [
+            (&[1e-300, 1e300, 1.0][..], "child cover above the parent's"),
+            (&[2.0, 1.0, 0.5][..], "children short of the parent"),
+            (&[2.0, 1.5, 1.5][..], "children over the parent"),
+        ] {
+            let err = stump(weighted).unwrap_err();
+            assert!(
+                matches!(&err, Error::InvalidInput(m) if m.contains("cover")),
+                "{what}: got {err:?}"
+            );
+        }
+        // Rounding in a weighted sum is not an inconsistency.
+        assert!(stump(&[0.3, 0.1, 0.2]).is_ok(), "0.1 + 0.2 != 0.3 in f64");
+        assert!(stump(&[2.0, 1.0, 1.0]).is_ok());
     }
 
     #[test]
