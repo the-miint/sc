@@ -125,7 +125,8 @@ absolute directory of its own and adds that directory to its include path;
 without it the header goes to the build's `OUT_DIR`, never into the source tree.
 It exposes opaque `sc_context_t` / `sc_model_t` handles, Arrow C-Data-Interface
 I/O, a `catch_unwind` panic barrier (no panic crosses FFI), and `sc_status_t`
-error codes with per-context last-error strings.
+error codes with per-context last-error strings (`sc_thread_last_error()` holds
+the text for calls that take no context).
 
 - **Worked example:** [`crates/sc-capi/ctest/harness.c`](crates/sc-capi/ctest/harness.c)
   builds Arrow inputs, fits, predicts, serializes/reloads, runs TreeSHAP, and

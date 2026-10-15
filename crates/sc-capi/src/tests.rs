@@ -639,6 +639,90 @@ fn model_feature_ids_errors_when_absent() {
     }
 }
 
+/// Read the calling thread's contextless last error as an owned string.
+unsafe fn thread_last_error() -> String {
+    let p = sc_thread_last_error();
+    assert!(!p.is_null(), "no thread last error was recorded");
+    std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+}
+
+/// The functions that take no context used to drop their error text: the
+/// caller got a status code and nothing to show a user. Each records it as the
+/// thread's last error instead, readable through `sc_thread_last_error`.
+#[test]
+fn contextless_errors_are_readable_on_the_thread() {
+    let (ns, nf, r, c, v, labels) = separable();
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r, c, v);
+        let (t, ts) = ffi_utf8(&labels);
+        let params = base_params(7);
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        assert_eq!(
+            sc_fit_classifier(ctx, &table, &t, &ts, &params, &mut model),
+            SC_OK
+        );
+
+        // A model fit without feature ids.
+        let mut a = MaybeUninit::<FFI_ArrowArray>::uninit();
+        let mut s = MaybeUninit::<FFI_ArrowSchema>::uninit();
+        assert_eq!(
+            sc_model_feature_ids(model, a.as_mut_ptr(), s.as_mut_ptr()),
+            SC_ERR_INVALID_INPUT
+        );
+        let msg = thread_last_error();
+        assert!(msg.contains("no feature ids"), "unexpected message: {msg}");
+
+        // A NULL model, for each of the three.
+        assert_eq!(
+            sc_feature_importances(std::ptr::null(), a.as_mut_ptr(), s.as_mut_ptr()),
+            SC_ERR_NULL_POINTER
+        );
+        assert_eq!(thread_last_error(), "null pointer: model");
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len: usize = 0;
+        assert_eq!(
+            sc_model_serialize(model, std::ptr::null_mut(), &mut len),
+            SC_ERR_NULL_POINTER
+        );
+        assert_eq!(thread_last_error(), "null pointer: out_ptr/out_len");
+        assert_eq!(
+            sc_model_serialize(std::ptr::null(), &mut ptr, &mut len),
+            SC_ERR_NULL_POINTER
+        );
+        assert_eq!(thread_last_error(), "null pointer: model");
+
+        // A context call passed a NULL ctx has nowhere else to put its text.
+        assert_eq!(
+            sc_predict(
+                std::ptr::null_mut(),
+                model,
+                std::ptr::null(),
+                a.as_mut_ptr(),
+                s.as_mut_ptr()
+            ),
+            SC_ERR_NULL_POINTER
+        );
+        assert_eq!(thread_last_error(), "null pointer: ctx");
+
+        // An error recorded on a context stays there and leaves the thread's alone.
+        assert_eq!(
+            sc_fit_classifier(ctx, std::ptr::null(), &t, &ts, &params, &mut model),
+            SC_ERR_NULL_POINTER
+        );
+        assert_eq!(thread_last_error(), "null pointer: ctx");
+
+        // The text belongs to the thread that failed: another thread sees none.
+        let other = std::thread::spawn(|| sc_thread_last_error().is_null())
+            .join()
+            .unwrap();
+        assert!(other, "another thread saw this thread's error");
+
+        sc_model_free(model);
+        sc_context_free(ctx);
+    }
+}
+
 #[test]
 fn tuning_and_rfe_flag_paths_produce_valid_models() {
     let (ns, nf, r, c, v, labels) = balanced8();
