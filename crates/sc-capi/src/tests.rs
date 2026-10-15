@@ -904,6 +904,35 @@ fn saturated_counts_fit_a_stump() {
     }
 }
 
+/// Regression targets of ±1.7e308 overflow a leaf's mean. The fit used to
+/// succeed and serialize a model sc_model_deserialize then refused; it now fails
+/// with the reason, and no model comes back.
+#[test]
+fn fit_on_overflowing_targets_is_invalid_input() {
+    let (ns, nf, r, c, v) = dense_coo(&[&[0.0], &[1.0], &[2.0], &[3.0]]);
+    unsafe {
+        let ctx = new_ctx();
+        let table = make_table(ns, nf, r, c, v);
+        let (t, ts) = ffi_f64(vec![1.7e308, 1.7e308, -1.7e308, -1.7e308]);
+        let mut params = base_params(0);
+        params.criterion = sc_criterion_t::SC_CRITERION_SQUARED_ERROR;
+        params.max_features.kind = sc_max_features_kind_t::SC_MAX_FEATURES_ALL;
+        params.n_estimators = 4;
+        let mut model: *mut sc_model_t = std::ptr::null_mut();
+        let code = sc_fit_regressor(ctx, &table, &t, &ts, &params, &mut model);
+        assert_eq!(code, SC_ERR_INVALID_INPUT);
+        assert!(model.is_null());
+        let msg = std::ffi::CStr::from_ptr(sc_context_last_error(ctx))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            msg.contains("targets are too large"),
+            "unexpected message: {msg}"
+        );
+        sc_context_free(ctx);
+    }
+}
+
 #[test]
 fn panic_barrier_maps_to_sc_err_panic() {
     // The public API guards every known sc-core panic site, so a panic can't be

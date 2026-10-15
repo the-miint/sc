@@ -161,3 +161,52 @@ fn fit_tuned_round_trip() {
 // The byte-exact golden-fixture stability test lives inline in
 // `persist::tests` (it pins a version-independent lib_semver via a crate-internal
 // seam, so a release version bump does not spuriously trip the tripwire).
+
+/// A fit must never store a model its own loader rejects. The loader requires
+/// every node value, impurity and threshold to be finite; a fit on finite but
+/// extreme data can overflow them (a regression leaf's mean of two 1.7e308
+/// targets, a node's variance from targets past ~1.3e154, a split threshold on
+/// a feature at or below -f32::MAX, which the splitter compares in f32). Each
+/// case must either fail the fit or load back.
+#[test]
+fn a_fit_model_always_loads() {
+    let x1 = dense(&[&[0.0], &[1.0], &[2.0], &[3.0]]);
+    let reg = |y: &[f64]| Targets::numeric(y).unwrap();
+    let mut rp = RandomForestParams::regressor_defaults();
+    rp.n_estimators = 4;
+    let mut cp = RandomForestParams::classifier_defaults();
+    cp.n_estimators = 4;
+    let cases: Vec<(&str, FeatureMatrix, Targets, &RandomForestParams)> = vec![
+        (
+            "max targets",
+            x1.clone(),
+            reg(&[1.7e308, 1.7e308, -1.7e308, -1.7e308]),
+            &rp,
+        ),
+        (
+            "large targets",
+            x1.clone(),
+            reg(&[1e200, 2e200, -1e200, 3e200]),
+            &rp,
+        ),
+        (
+            "very negative feature",
+            dense(&[&[-1e39], &[-1e39], &[1.0], &[1.0]]),
+            Targets::categorical(&["a", "a", "b", "b"]).unwrap(),
+            &cp,
+        ),
+    ];
+    let mut unloadable = Vec::new();
+    for (what, x, y, p) in cases {
+        if let Ok(forest) = RandomForest::fit(&x, &y, p, 7) {
+            if let Err(e) = ModelBundle::from_bytes(&ModelBundle::new(forest).to_bytes()) {
+                unloadable.push(format!("{what}: {e}"));
+            }
+        }
+    }
+    assert!(
+        unloadable.is_empty(),
+        "fit stored models its loader rejects:\n{}",
+        unloadable.join("\n")
+    );
+}
