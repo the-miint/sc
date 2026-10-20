@@ -165,7 +165,9 @@ impl TreeParams {
         };
         min_samples_split = min_samples_split.max(2);
         // The unconditional coupling sklearn applies after both are resolved.
-        min_samples_split = min_samples_split.max(2 * min_samples_leaf);
+        // Saturating: a leaf count past usize::MAX / 2 (2^31 on wasm32) already
+        // forbids every split, and so does usize::MAX.
+        min_samples_split = min_samples_split.max(min_samples_leaf.saturating_mul(2));
 
         let max_features = match self.max_features {
             MaxFeatures::All => n_features,
@@ -197,7 +199,7 @@ impl TreeParams {
             min_impurity_decrease: self.min_impurity_decrease,
         };
         assert!(resolved.min_samples_leaf >= 1);
-        assert!(resolved.min_samples_split >= 2 * resolved.min_samples_leaf);
+        assert!(resolved.min_samples_split >= resolved.min_samples_leaf.saturating_mul(2));
         assert!((1..=n_features).contains(&resolved.max_features));
         Ok(resolved)
     }
@@ -273,6 +275,19 @@ mod tests {
         let r = p.resolve(100, 4).unwrap();
         assert_eq!(r.min_samples_leaf, 5);
         assert_eq!(r.min_samples_split, 10, "coupled up to 2*min_samples_leaf");
+    }
+
+    #[test]
+    fn resolve_saturates_the_coupling_for_huge_leaf_counts() {
+        // 2 * min_samples_leaf overflowed for a count past usize::MAX / 2: a
+        // panic in a debug build, a wrap in release. On wasm32 that is any count
+        // from 2^31, and the C API saturates larger ones to usize::MAX. No sample
+        // count reaches the threshold either way, so it saturates too.
+        let mut p = TreeParams::classifier_defaults();
+        p.min_samples_leaf = MinSamples::Count(usize::MAX);
+        let r = p.resolve(100, 4).unwrap();
+        assert_eq!(r.min_samples_leaf, usize::MAX);
+        assert_eq!(r.min_samples_split, usize::MAX);
     }
 
     #[test]

@@ -193,7 +193,7 @@ enum TargetData<'a> {
 fn should_stop(depth: usize, n_node: usize, r: &Resolved) -> bool {
     depth >= r.max_depth
         || n_node < r.min_samples_split
-        || n_node < 2 * r.min_samples_leaf
+        || n_node < r.min_samples_leaf.saturating_mul(2)
         || (n_node as f64) < 2.0 * r.min_weight_leaf
 }
 
